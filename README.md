@@ -171,7 +171,7 @@ In addition, you have access to the following meta-commands:
 Execute Python code by prefixing with `!`:
 
 ```
-! print("Hello, World!")
+! print(self.messages)
 ! import math
 ! math.sqrt(16)
 ```
