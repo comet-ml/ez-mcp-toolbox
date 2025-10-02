@@ -41,7 +41,11 @@ instant-mcp-chatbot --init
 
 Example dialog:
 
-<img width="861" height="845" alt="Screenshot from 2025-10-02 10-25-06" src="https://github.com/user-attachments/assets/6f75fc73-e329-4af0-97f0-449015284e16" />
+<img width="800" alt="chatbot interaction" src="https://github.com/user-attachments/assets/6f75fc73-e329-4af0-97f0-449015284e16" />
+
+This interaction of the LLM with the MCP tools will be logged, and available for examination and debugging in Opik:
+
+<img width="800" alt="chatbot interaction as logged to opik" src="https://github.com/user-attachments/assets/3ad0d79a-7f99-4211-aede-5e0cd81d80c3" />
 
 The rest of this file describes these two commands.
 
