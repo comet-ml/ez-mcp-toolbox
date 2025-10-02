@@ -31,6 +31,41 @@ server = Server("instant-mcp-server")
 # Global variable to track server state for clean shutdown
 _server_task = None
 
+
+def load_default_tools():
+    """Load the default example tools from the README."""
+    from .utils import registry
+
+    def add_numbers(a: float, b: float) -> float:
+        """
+        Add two numbers together.
+
+        Args:
+            a: First number to add
+            b: Second number to add
+
+        Returns:
+            The sum of a and b
+        """
+        return a + b
+
+    def greet_user(name: str) -> str:
+        """
+        Greet a user with a welcoming message.
+
+        Args:
+            name: The name of the person to greet
+
+        Returns:
+            A personalized greeting message
+        """
+        return f"Welcome to instant-mcp-server, {name}!"
+
+    # Register the default tools
+    registry.tool(add_numbers)
+    registry.tool(greet_user)
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Instant MCP Server")
@@ -59,15 +94,18 @@ def parse_args():
     )
     return parser.parse_args()
 
+
 @server.list_tools()
 async def list_tools() -> List[Tool]:
     """List available tools."""
     return registry.get_tools()
 
+
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Handle tool calls."""
     return registry.call_tool(name, arguments)
+
 
 # SSE transport implementation
 app = FastAPI(title="Instant MCP Server", version="1.0.0")
@@ -76,15 +114,17 @@ app = FastAPI(title="Instant MCP Server", version="1.0.0")
 _sse_clients = set()
 _message_queue = asyncio.Queue()
 
+
 @app.get("/sse")
 async def sse_endpoint():
     """SSE endpoint for server-to-client communication."""
+
     async def event_generator():
         # Add client to the set
         client_id = id(asyncio.current_task())
         _sse_clients.add(client_id)
         print(f"🔌 SSE client connected: {client_id}")
-        
+
         try:
             while True:
                 # Wait for messages from the message queue
@@ -98,7 +138,7 @@ async def sse_endpoint():
             print(f"🔌 SSE client disconnected: {client_id}")
         finally:
             _sse_clients.discard(client_id)
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -107,8 +147,9 @@ async def sse_endpoint():
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Cache-Control",
-        }
+        },
     )
+
 
 @app.post("/messages")
 async def message_endpoint(request: Request):
@@ -116,24 +157,26 @@ async def message_endpoint(request: Request):
     try:
         data = await request.json()
         print(f"📨 Received message: {data}")
-        
+
         # Process the message through the MCP server
         # This is a simplified implementation - in a real scenario,
         # you'd need to properly handle MCP protocol messages
         response = {"status": "received", "data": data}
-        
+
         # Send response back via SSE
         await _message_queue.put(response)
-        
+
         return {"status": "success", "message": "Message processed"}
     except Exception as e:
         print(f"❌ Error processing message: {e}")
         return {"status": "error", "message": str(e)}
 
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "transport": "sse"}
+
 
 async def start_sse_server(host: str, port: int):
     """Start the SSE server."""
@@ -141,10 +184,11 @@ async def start_sse_server(host: str, port: int):
     print(f"📡 SSE endpoint: http://{host}:{port}/sse")
     print(f"📨 Messages endpoint: http://{host}:{port}/messages")
     print(f"🏥 Health check: http://{host}:{port}/health")
-    
+
     config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server_instance = uvicorn.Server(config)
     await server_instance.serve()
+
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
@@ -154,44 +198,54 @@ def signal_handler(signum, frame):
     # Force immediate exit to avoid waiting for stdin
     os._exit(0)
 
+
 async def main():
     """Run the server."""
     global _server_task
-    
+
     # Parse command line arguments
     args = parse_args()
-    
+
     print("🚀 Instant MCP Server Starting...")
     print(f"🚌 Transport: {args.transport}")
     print(f"📁 Tools file: {args.tools_file}")
-    
+
     # Set up signal handlers for clean shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Load tools from the specified file
+
+    # Load tools from the specified file or use default tools
     try:
-        load_tools_from_file(args.tools_file)
-        print(f"✓ Loaded tools from {args.tools_file}")
+        if args.tools_file == "tools.py" and not os.path.exists(args.tools_file):
+            # No tools file provided and default doesn't exist, load example tools
+            load_default_tools()
+            print("✓ Loaded default example tools from README")
+        else:
+            load_tools_from_file(args.tools_file)
+            print(f"✓ Loaded tools from {args.tools_file}")
     except Exception as e:
         print(f"❌ Failed to load tools from {args.tools_file}: {e}")
         sys.exit(1)
-    
+
     # Initialize session context
     try:
         initialize_session()
         print("✓ Session initialized")
     except Exception as e:
         print(f"⚠️  Session initialization failed: {e}")
-    
+
     print(f"🔧 Available tools: {[tool.name for tool in registry.get_tools()]}")
-    
+
     try:
         if args.transport == "stdio":
             # Use stdio transport (default)
             async with stdio_server() as (read_stream, write_stream):
                 _server_task = asyncio.create_task(
-                    server.run(read_stream, write_stream, server.create_initialization_options())
+                    server.run(
+                        read_stream,
+                        write_stream,
+                        server.create_initialization_options(),
+                    )
                 )
                 await _server_task
         elif args.transport == "sse":
@@ -212,9 +266,11 @@ async def main():
         print(f"❌ Server error: {e}")
         raise
 
+
 def main_sync():
     """Synchronous entry point for the instant-mcp command."""
     asyncio.run(main())
+
 
 if __name__ == "__main__":
     main_sync()

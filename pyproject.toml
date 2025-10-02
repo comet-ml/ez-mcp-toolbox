@@ -9,12 +9,12 @@ description = "Utilities for creating and debugging MCP tools"
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Comet ML Team", email = "support@comet.com"}
+    {name = "Opik Team", email = "support@comet.com"}
 ]
 maintainers = [
-    {name = "Comet ML Team", email = "support@comet.com"}
+    {name = "Opik Team", email = "support@comet.com"}
 ]
-keywords = ["comet", "ml", "mcp", "model-context-protocol", "machine-learning", "experiment-tracking"]
+keywords = ["opik", "mcp", "model-context-protocol", "llm", "observability", "debugging"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -45,7 +45,6 @@ dependencies = [
     "nest-asyncio>=1.5.0",
     "pillow>=9.0.0",
     "opik>=0.1.0",
-    "comet-ml>=3.0.0",
     "matplotlib>=3.5.0",
 ]
 

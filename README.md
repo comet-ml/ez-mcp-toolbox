@@ -5,6 +5,24 @@ This package contains two command-line utilities:
 1. `instant-mcp-server` - turn a file of Python functions into a MCP server
 2. `instant-mcp-chatbot` - interactively debug MCP servers, with traces logged to Opik
 
+## Installation
+
+```
+pip install instant-mcp --upgrade
+```
+
+## Quick start
+
+```
+instant-mcp-chatbot
+```
+
+That will start a `instant-mcp-server` (using example tools below) and the `instant-mcp-chatbot` configured to use those tools.
+
+Example dialog:
+
+
+
 The rest of this file describes these two commands.
 
 ## instant-mcp-server
@@ -106,7 +124,7 @@ instant-mcp-chatbot --init
 
 This creates a `config.json` file with default settings.
 
-Edit `config.json` to specify your model and MCP servers:
+Edit `config.json` to specify your model and MCP servers. For example:
 
 ```json
 {
@@ -119,7 +137,7 @@ Edit `config.json` to specify your model and MCP servers:
       "name": "instant-mcp-server",
       "description": "Instant MCP server from Python files",
       "command": "instant-mcp-server",
-      "args": []
+      "args": ["/path/to/my_tools.py"]
     }
   ]
 }
@@ -134,22 +152,28 @@ Supported model formats:
 
 ### Basic Commands
 
-Inside the instant-mcp-chatbot, you can have a normal LLM conversation.
+Inside the `instant-mcp-chatbot`, you can have a normal LLM conversation.
 
 In addition, you have access to the following meta-commands:
 
 - `/clear` - Clear the conversation history
 - `/help` - Show available commands
+- `/debug on` or `/debug off` to toggle debug output
+- `/show tools` - to list all available tools
+- `/show tools SERVER` - to list tools for a specific server
+- `/run SERVER.TOOL` - to execute a tool
+- `! python_code` - to execute Python code (e.g., '! print(2+2)')
 - `quit` or `exit` - Exit the chatbot
+
 
 ### Python Code Execution
 
 Execute Python code by prefixing with `!`:
 
 ```
-!print("Hello, World!")
-!import math
-!math.sqrt(16)
+! print("Hello, World!")
+! import math
+! math.sqrt(16)
 ```
 
 ### Tool Usage
@@ -223,7 +247,6 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ### Prerequisites
 
 - Python 3.8 or higher
-- Comet ML account and API key (for Comet ML integration)
 - OpenAI, Anthropic, or other LLM provider API key (for chatbot functionality)
 
 ### Install from Source
