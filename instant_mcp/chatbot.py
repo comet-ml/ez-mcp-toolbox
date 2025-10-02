@@ -2002,12 +2002,8 @@ Examples:
 
 
 async def main():
+    # Parse arguments
     args = parse_arguments()
-
-    # Handle --init flag
-    if args.init:
-        create_default_config(args.config_path)
-        return
 
     # Configure Opik based on command-line argument
     configure_opik(args.opik)
@@ -2023,6 +2019,18 @@ with any of the available tools.
 
 def main_sync():
     """Synchronous entry point that handles event loop conflicts."""
+    try:
+        # Parse arguments first to handle --help and --init without async issues
+        args = parse_arguments()
+
+        # Handle --init flag synchronously
+        if args.init:
+            create_default_config(args.config_path)
+            return
+    except SystemExit:
+        # This happens when --help is used, which is expected behavior
+        return
+
     # Apply nest_asyncio to allow nested event loops
     import nest_asyncio
 
