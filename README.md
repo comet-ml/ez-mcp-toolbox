@@ -1,9 +1,17 @@
 # Instant MCP
 
+*A Comet ML Open Source Project*
+
 This package contains two command-line utilities:
 
-1. `instant-mcp-server` - turn a file of Python functions into a MCP server
+1. `instant-mcp-server` - turns a file of Python functions into a MCP server
 2. `instant-mcp-chatbot` - interactively debug MCP servers, with traces logged to Opik
+
+## Why?
+
+The `instant-mcp-server` allows a quick way to examine tools, signatures, descriptions, latency, and return values. Combined with the chatbot, you can create a fast workflow to interate on your MCP tools.
+
+The `instant-mcp-chatbot` allows a quick method to examine and debug LLM and MCP tool interactions, with observability available through Opik. Although the [Opik Playground](https://www.comet.com/docs/opik/opik-university/prompt-engineering/prompt-playground) gives you the ability to test your prompts on datasets, do A/B testing, and more, this chatbot gives you a command-line interaction, debugging tools, combined with Opik observability.
 
 ## Installation
 
