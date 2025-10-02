@@ -21,7 +21,7 @@ That will start a `instant-mcp-server` (using example tools below) and the `inst
 
 Example dialog:
 
-
+<img width="861" height="845" alt="Screenshot from 2025-10-02 10-25-06" src="https://github.com/user-attachments/assets/6f75fc73-e329-4af0-97f0-449015284e16" />
 
 The rest of this file describes these two commands.
 
