@@ -70,13 +70,6 @@ def configure_opik(opik_mode: str = "hosted"):
         print("Continuing without Opik tracing...")
 
 
-SYSTEM_PROMPT = """ 
-You are a helpful AI assistant that can use various tools to help
-users with their tasks. You have access to MCP (Model Context
-Protocol) servers that provide specialized tools. When users ask
-questions, use the available tools to gather information and provide
-comprehensive answers.
-"""
 
 
 @dataclass
@@ -314,13 +307,11 @@ class MCPChatbot:
     def __init__(
         self,
         config_path: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str,
         max_rounds: Optional[int] = 4,
         debug: bool = False,
     ):
-        self.system_prompt = (
-            system_prompt if system_prompt is not None else SYSTEM_PROMPT
-        )
+        self.system_prompt = system_prompt
         self.servers, self.model, self.model_kwargs = self.load_config(config_path)
         self.max_rounds = max_rounds
         self.debug = debug
@@ -1973,6 +1964,7 @@ Examples:
   instant-mcp-chatbot --opik hosted      # Use hosted Opik instance
   instant-mcp-chatbot --opik disabled    # Disable Opik tracing
   instant-mcp-chatbot --init             # Create default config.json
+  instant-mcp-chatbot --system-prompt "You are a helpful coding assistant"  # Custom system prompt
         """,
     )
 
@@ -1998,6 +1990,12 @@ Examples:
         "--debug", action="store_true", help="Enable debug output during processing"
     )
 
+    parser.add_argument(
+        "--system-prompt",
+        type=str,
+        help="Custom system prompt for the chatbot (overrides default)",
+    )
+
     return parser.parse_args()
 
 
@@ -2008,7 +2006,8 @@ async def main():
     # Configure Opik based on command-line argument
     configure_opik(args.opik)
 
-    system_prompt = """
+    # Use provided system prompt or default
+    system_prompt = args.system_prompt if args.system_prompt else """
 You are a helpful AI system for answering questions that can be answered
 with any of the available tools.
 """

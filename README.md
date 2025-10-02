@@ -19,6 +19,18 @@ instant-mcp-chatbot
 
 That will start a `instant-mcp-server` (using example tools below) and the `instant-mcp-chatbot` configured to use those tools.
 
+### Customize the chatbot
+
+You can customize the chatbot's behavior with a custom system prompt:
+
+```bash
+# Use a custom system prompt
+instant-mcp-chatbot --system-prompt "You are a helpful coding assistant"
+
+# Create a default configuration
+instant-mcp-chatbot --init
+```
+
 Example dialog:
 
 <img width="861" height="845" alt="Screenshot from 2025-10-02 10-25-06" src="https://github.com/user-attachments/assets/6f75fc73-e329-4af0-97f0-449015284e16" />
@@ -180,6 +192,40 @@ Execute Python code by prefixing with `!`:
 
 The chatbot automatically discovers and uses tools from connected MCP servers. Simply ask questions that require tool usage, and the chatbot will automatically call the appropriate tools.
 
+## System Prompts
+
+The chatbot uses a system prompt to define its behavior and personality. You can customize this using the `--system-prompt` command line option.
+
+### Default System Prompt
+
+By default, the chatbot uses this system prompt:
+
+```
+You are a helpful AI system for answering questions that can be answered
+with any of the available tools.
+```
+
+### Custom System Prompts
+
+You can override the default system prompt to customize the chatbot's behavior:
+
+```bash
+# Make it a coding assistant
+instant-mcp-chatbot --system-prompt "You are an expert Python developer who helps with coding tasks."
+
+# Make it a data analyst
+instant-mcp-chatbot --system-prompt "You are a data scientist who specializes in analyzing datasets and creating visualizations."
+
+# Make it more conversational
+instant-mcp-chatbot --system-prompt "You are a friendly AI assistant who loves to help users with their questions and tasks."
+```
+
+The system prompt affects how the chatbot:
+- Interprets user requests
+- Decides which tools to use
+- Structures its responses
+- Maintains conversation context
+
 ## Opik Integration
 
 The chatbot includes built-in Opik observability integration:
@@ -215,7 +261,21 @@ instant-mcp-chatbot --opik local
 
 # Disable Opik
 instant-mcp-chatbot --opik disabled
+
+# Use custom system prompt
+instant-mcp-chatbot --system-prompt "You are a helpful coding assistant"
+
+# Combine options
+instant-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --debug
 ```
+
+#### Available Options
+
+- `--opik {local,hosted,disabled}` - Opik tracing mode (default: hosted)
+- `--system-prompt TEXT` - Custom system prompt for the chatbot (overrides default)
+- `--debug` - Enable debug output during processing
+- `--init` - Create a default config.json file and exit
+- `config_path` - Path to the configuration file (default: config.json)
 
 ## License
 
