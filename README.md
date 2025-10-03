@@ -1,11 +1,11 @@
-# EZ MCP
+# EZ MCP Toolbox
 
 *A Comet ML Open Source Project*
 
-This package contains two command-line easy to use utilities:
+This Python toolbox contains two command-line easy to use utilities:
 
 1. `ez-mcp-server` - turns a file of Python functions into a MCP server
-2. `ez-mcp-chatbot` - interactively debug MCP servers, with traces logged to Opik
+2. `ez-mcp-chatbot` - interactively debug MCP servers, with traces logged to [Opik](https://www.comet.com/site/products/opik/)
 
 ## Why?
 
@@ -16,7 +16,7 @@ The `ez-mcp-chatbot` allows a quick method to examine and debug LLM and MCP tool
 ## Installation
 
 ```
-pip install ez-mcp --upgrade
+pip install ez-mcp-toolbox --upgrade
 ```
 
 ## Quick start
@@ -92,7 +92,7 @@ ez-mcp-server my_tools.py
 ```
 
 The server will automatically:
-- Load all functions from your file (no ez_mcp imports required)
+- Load all functions from your file (no ez_mcp_toolbox imports required)
 - Convert them to MCP tools
 - Generate JSON schemas from your function signatures
 - Use your docstrings as tool descriptions
@@ -295,8 +295,8 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## Support
 
-- **Documentation**: [GitHub Repository](https://github.com/comet-ml/ez-mcp)
-- **Issues**: [GitHub Issues](https://github.com/comet-ml/ez-mcp/issues)
+- **Documentation**: [GitHub Repository](https://github.com/comet-ml/ez-mcp-toolbox)
+- **Issues**: [GitHub Issues](https://github.com/comet-ml/ez-mcp-toolbox/issues)
 
 ## Acknowledgments
 
@@ -325,8 +325,8 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ```bash
 # Clone the repository
-git clone https://github.com/comet-ml/ez-mcp.git
-cd ez-mcp
+git clone https://github.com/comet-ml/ez-mcp-toolbox.git
+cd ez-mcp-toolbox
 
 # Install in development mode
 pip install -e .

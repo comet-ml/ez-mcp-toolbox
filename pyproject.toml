@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ez-mcp"
+name = "ez-mcp-toolbox"
 version = "1.0.0"
 description = "Utilities for creating and debugging MCP tools"
 readme = "README.md"
@@ -63,21 +63,21 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/comet-ml/ez-mcp"
-Repository = "https://github.com/comet-ml/ez-mcp"
-Documentation = "https://github.com/comet-ml/ez-mcp#readme"
-"Bug Tracker" = "https://github.com/comet-ml/ez-mcp/issues"
+Homepage = "https://github.com/comet-ml/ez-mcp-toolbox"
+Repository = "https://github.com/comet-ml/ez-mcp-toolbox"
+Documentation = "https://github.com/comet-ml/ez-mcp-toolbox#readme"
+"Bug Tracker" = "https://github.com/comet-ml/ez-mcp-toolbox/issues"
 
 [project.scripts]
-ez-mcp-server = "ez_mcp.server:main_sync"
-ez-mcp-chatbot = "ez_mcp.chatbot:main_sync"
+ez-mcp-server = "ez_mcp_toolbox.server:main_sync"
+ez-mcp-chatbot = "ez_mcp_toolbox.chatbot:main_sync"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ez_mcp*"]
+include = ["ez_mcp_toolbox*"]
 
 [tool.setuptools.package-data]
-ez_mcp = ["*.py", "*.md", "*.txt"]
+ez_mcp_toolbox = ["*.py", "*.md", "*.txt"]
 
 [tool.black]
 line-length = 88
@@ -101,7 +101,7 @@ extend-exclude = '''
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["ez_mcp"]
+known_first_party = ["ez_mcp_toolbox"]
 
 [tool.mypy]
 python_version = "3.8"
