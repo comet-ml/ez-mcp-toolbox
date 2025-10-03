@@ -49,7 +49,7 @@ def configure_opik(opik_mode: str = "hosted"):
         return
 
     # Set the project name via environment variable
-    os.environ["OPIK_PROJECT_NAME"] = "instant-mcp-chatbot"
+    os.environ["OPIK_PROJECT_NAME"] = "ez-mcp-chatbot"
 
     try:
         if opik_mode == "local":
@@ -380,9 +380,9 @@ class MCPChatbot:
                 "model_kwargs": {"temperature": 0.2},
                 "mcp_servers": [
                     {
-                        "name": "instant-mcp-server",
-                        "description": "Instant MCP server with default tools",
-                        "command": "instant-mcp-server",
+                        "name": "ez-mcp-server",
+                        "description": "Ez MCP server with default tools",
+                        "command": "ez-mcp-server",
                         "args": [],
                     }
                 ],
@@ -1618,7 +1618,7 @@ class MCPChatbot:
                     self.console.print("[dim]Assistant: (no reply)[/dim]")
                 self.console.print()  # Add spacing between exchanges
         finally:
-            self.console.print("\n[dim]Shutting down instant-mcp-chatbot...[/dim]")
+            self.console.print("\n[dim]Shutting down ez-mcp-chatbot...[/dim]")
             await self.close()
 
     async def close(self):
@@ -1883,9 +1883,9 @@ class MCPChatbot:
                 result += f"   To get tools: await self.sessions['{server_name}'].list_tools()\n"
 
             result += "\n🔧 Quick Tool Examples:\n"
-            result += "   await self.sessions['instant-mcp-server'].call_tool('list_experiments', {'limit': 5})\n"
-            result += "   await self.sessions['instant-mcp-server'].call_tool('list_projects', {})\n"
-            result += "   await self.sessions['instant-mcp-server'].call_tool('get_session_info', {'random_string': 'test'})\n"
+            result += "   await self.sessions['ez-mcp-server'].call_tool('list_experiments', {'limit': 5})\n"
+            result += "   await self.sessions['ez-mcp-server'].call_tool('list_projects', {})\n"
+            result += "   await self.sessions['ez-mcp-server'].call_tool('get_session_info', {'random_string': 'test'})\n"
 
             result += "\n💡 To see all tools:\n"
             result += "   await self._get_all_tools()\n"
@@ -1935,9 +1935,9 @@ def create_default_config(config_path: str = "config.json"):
         "model_kwargs": {"temperature": 0.0},
         "mcp_servers": [
             {
-                "name": "instant-mcp-server",
-                "description": "Instant MCP server for tool discovery and execution",
-                "command": "instant-mcp-server",
+                "name": "ez-mcp-server",
+                "description": "Ez MCP server for tool discovery and execution",
+                "command": "ez-mcp-server",
                 "args": [],
             }
         ],
@@ -1960,11 +1960,11 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  instant-mcp-chatbot config.json        # Use specific config
-  instant-mcp-chatbot --opik hosted      # Use hosted Opik instance
-  instant-mcp-chatbot --opik disabled    # Disable Opik tracing
-  instant-mcp-chatbot --init             # Create default config.json
-  instant-mcp-chatbot --system-prompt "You are a helpful coding assistant"  # Custom system prompt
+  ez-mcp-chatbot config.json        # Use specific config
+  ez-mcp-chatbot --opik hosted      # Use hosted Opik instance
+  ez-mcp-chatbot --opik disabled    # Disable Opik tracing
+  ez-mcp-chatbot --init             # Create default config.json
+  ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"  # Custom system prompt
         """,
     )
 

@@ -26,7 +26,7 @@ from fastapi.responses import StreamingResponse
 import uvicorn
 
 # Create the server
-server = Server("instant-mcp-server")
+server = Server("ez-mcp-server")
 
 # Global variable to track server state for clean shutdown
 _server_task = None
@@ -59,7 +59,7 @@ def load_default_tools():
         Returns:
             A personalized greeting message
         """
-        return f"Welcome to instant-mcp-server, {name}!"
+        return f"Welcome to ez-mcp-server, {name}!"
 
     # Register the default tools
     registry.tool(add_numbers)
@@ -68,7 +68,7 @@ def load_default_tools():
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Instant MCP Server")
+    parser = argparse.ArgumentParser(description="Ez MCP Server")
     parser.add_argument(
         "tools_file",
         nargs="?",
@@ -108,7 +108,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Dict[str, Any]
 
 
 # SSE transport implementation
-app = FastAPI(title="Instant MCP Server", version="1.0.0")
+app = FastAPI(title="Ez MCP Server", version="1.0.0")
 
 # Global variables for SSE communication
 _sse_clients = set()
@@ -206,7 +206,7 @@ async def main():
     # Parse command line arguments
     args = parse_args()
 
-    print("🚀 Instant MCP Server Starting...")
+    print("🚀 Ez MCP Server Starting...")
     print(f"🚌 Transport: {args.transport}")
     print(f"📁 Tools file: {args.tools_file}")
 
@@ -268,7 +268,7 @@ async def main():
 
 
 def main_sync():
-    """Synchronous entry point for the instant-mcp command."""
+    """Synchronous entry point for the ez-mcp command."""
     asyncio.run(main())
 
 

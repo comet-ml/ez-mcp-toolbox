@@ -1,31 +1,31 @@
-# Instant MCP
+# Ez MCP
 
 *A Comet ML Open Source Project*
 
 This package contains two command-line utilities:
 
-1. `instant-mcp-server` - turns a file of Python functions into a MCP server
-2. `instant-mcp-chatbot` - interactively debug MCP servers, with traces logged to Opik
+1. `ez-mcp-server` - turns a file of Python functions into a MCP server
+2. `ez-mcp-chatbot` - interactively debug MCP servers, with traces logged to Opik
 
 ## Why?
 
-The `instant-mcp-server` allows a quick way to examine tools, signatures, descriptions, latency, and return values. Combined with the chatbot, you can create a fast workflow to interate on your MCP tools.
+The `ez-mcp-server` allows a quick way to examine tools, signatures, descriptions, latency, and return values. Combined with the chatbot, you can create a fast workflow to interate on your MCP tools.
 
-The `instant-mcp-chatbot` allows a quick method to examine and debug LLM and MCP tool interactions, with observability available through [Opik](https://github.com/comet-ml/opik). Although the [Opik Playground](https://www.comet.com/docs/opik/opik-university/prompt-engineering/prompt-playground) gives you the ability to test your prompts on datasets, do A/B testing, and more, this chatbot gives you a command-line interaction, debugging tools, combined with Opik observability.
+The `ez-mcp-chatbot` allows a quick method to examine and debug LLM and MCP tool interactions, with observability available through [Opik](https://github.com/comet-ml/opik). Although the [Opik Playground](https://www.comet.com/docs/opik/opik-university/prompt-engineering/prompt-playground) gives you the ability to test your prompts on datasets, do A/B testing, and more, this chatbot gives you a command-line interaction, debugging tools, combined with Opik observability.
 
 ## Installation
 
 ```
-pip install instant-mcp --upgrade
+pip install ez-mcp --upgrade
 ```
 
 ## Quick start
 
 ```
-instant-mcp-chatbot
+ez-mcp-chatbot
 ```
 
-That will start a `instant-mcp-server` (using example tools below) and the `instant-mcp-chatbot` configured to use those tools.
+That will start a `ez-mcp-server` (using example tools below) and the `ez-mcp-chatbot` configured to use those tools.
 
 ### Customize the chatbot
 
@@ -33,10 +33,10 @@ You can customize the chatbot's behavior with a custom system prompt:
 
 ```bash
 # Use a custom system prompt
-instant-mcp-chatbot --system-prompt "You are a helpful coding assistant"
+ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"
 
 # Create a default configuration
-instant-mcp-chatbot --init
+ez-mcp-chatbot --init
 ```
 
 Example dialog:
@@ -49,7 +49,7 @@ This interaction of the LLM with the MCP tools will be logged, and available for
 
 The rest of this file describes these two commands.
 
-## instant-mcp-server
+## ez-mcp-server
 
 A command-line utility for turning a regular file of Python functions or classes into a full-fledged MCP server.
 
@@ -82,17 +82,17 @@ def greet_user(name: str) -> str:
     Returns:
         A personalized greeting message
     """
-    return f"Welcome to instant-mcp-server, {name}!"
+    return f"Welcome to ez-mcp-server, {name}!"
 ```
 
 Then run the server with your custom tools:
 
 ```bash
-instant-mcp-server my_tools.py
+ez-mcp-server my_tools.py
 ```
 
 The server will automatically:
-- Load all functions from your file (no instant_mcp imports required)
+- Load all functions from your file (no ez_mcp imports required)
 - Convert them to MCP tools
 - Generate JSON schemas from your function signatures
 - Use your docstrings as tool descriptions
@@ -103,7 +103,7 @@ to run from inside a system that will dynamically start the server (see below).
 ### Command-line Options
 
 ```
-instant-mcp-server [-h] [--transport {stdio,sse}] [--host HOST] [--port PORT] [tools_file]
+ez-mcp-server [-h] [--transport {stdio,sse}] [--host HOST] [--port PORT] [tools_file]
 ```
 
 Positional arguments:
@@ -115,7 +115,7 @@ Options:
   * `--host HOST` - Host for SSE transport (default: `localhost`)
   * `--port PORT` - Port for SSE transport (default: `8000`)
 
-# Instant MCP Chatbot
+# Ez MCP Chatbot
 
 A powerful AI chatbot that integrates with Model Context Protocol (MCP) servers and provides observability through Opik tracing. This chatbot can connect to various MCP servers to access specialized tools and capabilities, making it a versatile assistant for different tasks.
 
@@ -143,7 +143,7 @@ The server implements the full MCP specification:
 Create a default configuration file:
 
 ```bash
-instant-mcp-chatbot --init
+ez-mcp-chatbot --init
 ```
 
 This creates a `config.json` file with default settings.
@@ -158,9 +158,9 @@ Edit `config.json` to specify your model and MCP servers. For example:
   },
   "mcp_servers": [
     {
-      "name": "instant-mcp-server",
-      "description": "Instant MCP server from Python files",
-      "command": "instant-mcp-server",
+      "name": "ez-mcp-server",
+      "description": "Ez MCP server from Python files",
+      "command": "ez-mcp-server",
       "args": ["/path/to/my_tools.py"]
     }
   ]
@@ -176,7 +176,7 @@ Supported model formats:
 
 ### Basic Commands
 
-Inside the `instant-mcp-chatbot`, you can have a normal LLM conversation.
+Inside the `ez-mcp-chatbot`, you can have a normal LLM conversation.
 
 In addition, you have access to the following meta-commands:
 
@@ -223,13 +223,13 @@ You can override the default system prompt to customize the chatbot's behavior:
 
 ```bash
 # Make it a coding assistant
-instant-mcp-chatbot --system-prompt "You are an expert Python developer who helps with coding tasks."
+ez-mcp-chatbot --system-prompt "You are an expert Python developer who helps with coding tasks."
 
 # Make it a data analyst
-instant-mcp-chatbot --system-prompt "You are a data scientist who specializes in analyzing datasets and creating visualizations."
+ez-mcp-chatbot --system-prompt "You are a data scientist who specializes in analyzing datasets and creating visualizations."
 
 # Make it more conversational
-instant-mcp-chatbot --system-prompt "You are a friendly AI assistant who loves to help users with their questions and tasks."
+ez-mcp-chatbot --system-prompt "You are a friendly AI assistant who loves to help users with their questions and tasks."
 ```
 
 The system prompt affects how the chatbot:
@@ -266,19 +266,19 @@ export OPIK_LOCAL_URL=http://localhost:8080
 
 ```bash
 # Use hosted Opik (default)
-instant-mcp-chatbot --opik hosted
+ez-mcp-chatbot --opik hosted
 
 # Use local Opik
-instant-mcp-chatbot --opik local
+ez-mcp-chatbot --opik local
 
 # Disable Opik
-instant-mcp-chatbot --opik disabled
+ez-mcp-chatbot --opik disabled
 
 # Use custom system prompt
-instant-mcp-chatbot --system-prompt "You are a helpful coding assistant"
+ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"
 
 # Combine options
-instant-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --debug
+ez-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --debug
 ```
 
 #### Available Options
@@ -295,8 +295,8 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## Support
 
-- **Documentation**: [GitHub Repository](https://github.com/comet-ml/instant-mcp)
-- **Issues**: [GitHub Issues](https://github.com/comet-ml/instant-mcp/issues)
+- **Documentation**: [GitHub Repository](https://github.com/comet-ml/ez-mcp)
+- **Issues**: [GitHub Issues](https://github.com/comet-ml/ez-mcp/issues)
 
 ## Acknowledgments
 
@@ -325,8 +325,8 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ```bash
 # Clone the repository
-git clone https://github.com/comet-ml/instant-mcp.git
-cd instant-mcp
+git clone https://github.com/comet-ml/ez-mcp.git
+cd ez-mcp
 
 # Install in development mode
 pip install -e .

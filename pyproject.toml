@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "instant-mcp"
+name = "ez-mcp"
 version = "1.0.0"
 description = "Utilities for creating and debugging MCP tools"
 readme = "README.md"
@@ -63,21 +63,21 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/comet-ml/instant-mcp"
-Repository = "https://github.com/comet-ml/instant-mcp"
-Documentation = "https://github.com/comet-ml/instant-mcp#readme"
-"Bug Tracker" = "https://github.com/comet-ml/instant-mcp/issues"
+Homepage = "https://github.com/comet-ml/ez-mcp"
+Repository = "https://github.com/comet-ml/ez-mcp"
+Documentation = "https://github.com/comet-ml/ez-mcp#readme"
+"Bug Tracker" = "https://github.com/comet-ml/ez-mcp/issues"
 
 [project.scripts]
-instant-mcp-server = "instant_mcp.server:main_sync"
-instant-mcp-chatbot = "instant_mcp.chatbot:main_sync"
+ez-mcp-server = "ez_mcp.server:main_sync"
+ez-mcp-chatbot = "ez_mcp.chatbot:main_sync"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["instant_mcp*"]
+include = ["ez_mcp*"]
 
 [tool.setuptools.package-data]
-instant_mcp = ["*.py", "*.md", "*.txt"]
+ez_mcp = ["*.py", "*.md", "*.txt"]
 
 [tool.black]
 line-length = 88
@@ -101,7 +101,7 @@ extend-exclude = '''
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["instant_mcp"]
+known_first_party = ["ez_mcp"]
 
 [tool.mypy]
 python_version = "3.8"
