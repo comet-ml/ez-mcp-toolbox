@@ -1,8 +1,8 @@
-# Ez MCP
+# EZ MCP
 
 *A Comet ML Open Source Project*
 
-This package contains two command-line utilities:
+This package contains two command-line easy to use utilities:
 
 1. `ez-mcp-server` - turns a file of Python functions into a MCP server
 2. `ez-mcp-chatbot` - interactively debug MCP servers, with traces logged to Opik
@@ -41,7 +41,7 @@ ez-mcp-chatbot --init
 
 Example dialog:
 
-<img width="800" alt="chatbot interaction" src="https://github.com/user-attachments/assets/6f75fc73-e329-4af0-97f0-449015284e16" />
+![ez-mcp-video](https://github.com/user-attachments/assets/296d7084-becd-467c-878c-16daec714b65)
 
 This interaction of the LLM with the MCP tools will be logged, and available for examination and debugging in Opik:
 
