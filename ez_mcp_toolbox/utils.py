@@ -7,9 +7,13 @@ import inspect
 import json
 import importlib.util
 import sys
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Callable, Optional, Union
 from mcp import Tool
+from rich.console import Console
+from opik import track
+import opik
 
 
 class ToolRegistry:
@@ -77,10 +81,12 @@ class ToolRegistry:
 
             # Create the property schema
             property_schema = {"type": param_type, "description": description}
-            
+
             # Handle array types - add items schema
             if param_type == "array":
-                property_schema["items"] = self._get_array_items_schema(param.annotation)
+                property_schema["items"] = self._get_array_items_schema(
+                    param.annotation
+                )
 
             properties[param_name] = property_schema
 
@@ -125,16 +131,13 @@ class ToolRegistry:
         if hasattr(annotation, "__args__") and annotation.__args__:
             # Handle List[SomeType] - get the type of items
             item_type = annotation.__args__[0]
-            
+
             # Handle nested List types like List[List[float]]
             if hasattr(item_type, "__origin__") and item_type.__origin__ is list:
                 # For List[List[SomeType]], return array of arrays
                 if item_type.__args__:
                     inner_type = self._get_json_type(item_type.__args__[0])
-                    return {
-                        "type": "array",
-                        "items": {"type": inner_type}
-                    }
+                    return {"type": "array", "items": {"type": inner_type}}
                 else:
                     return {"type": "array", "items": {"type": "string"}}
             else:
@@ -186,14 +189,16 @@ class ToolRegistry:
 
         try:
             func = self._tools[name]["function"]
-            
+
             # Get the function signature to determine which arguments to pass
             sig = inspect.signature(func)
             func_params = set(sig.parameters.keys())
-            
+
             # Filter arguments to only include those that the function accepts
-            filtered_arguments = {k: v for k, v in arguments.items() if k in func_params}
-            
+            filtered_arguments = {
+                k: v for k, v in arguments.items() if k in func_params
+            }
+
             result = func(**filtered_arguments)
 
             # Convert result to MCP format
@@ -223,75 +228,306 @@ def load_tools_from_file(file_path: str) -> None:
     """
     Load tools from a Python file and register them with the global registry.
     Supports both standalone functions and class methods.
-    
+
     Args:
         file_path: Path to the Python file containing tool functions or classes
     """
     # Clear existing tools
     registry._tools.clear()
-    
+
     # Load the module from file
     spec = importlib.util.spec_from_file_location("tools_module", file_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load module from {file_path}")
-    
+
     module = importlib.util.module_from_spec(spec)
     sys.modules["tools_module"] = module
     spec.loader.exec_module(module)
-    
+
     # Skip utility functions and classes
-    skip_functions = {
-        'TypedDict'
-    }
-    
+    skip_functions = {"TypedDict"}
+
     # First, look for standalone functions (backward compatibility)
     for name, obj in inspect.getmembers(module):
-        if (inspect.isfunction(obj) and 
-            not name.startswith('_') and 
-            name not in skip_functions):
+        if (
+            inspect.isfunction(obj)
+            and not name.startswith("_")
+            and name not in skip_functions
+        ):
             # Register the function as a tool
             registry.tool(obj)
-    
+
     # Then, look for classes with methods that can be used as tools
     for name, obj in inspect.getmembers(module):
-        if (inspect.isclass(obj) and 
-            not name.startswith('_') and 
-            name not in skip_functions and
-            name in module.__dict__ and
-            obj.__module__ == module.__name__):
-            
+        if (
+            inspect.isclass(obj)
+            and not name.startswith("_")
+            and name not in skip_functions
+            and name in module.__dict__
+            and obj.__module__ == module.__name__
+        ):
+
             # Create an instance of the class
             try:
                 instance = obj()
-                
+
                 # Find all methods in the class - only those defined in the class itself
                 for method_name, method in instance.__class__.__dict__.items():
-                    if (not method_name.startswith('_') and 
-                        method_name not in skip_functions and
-                        callable(method) and
-                        inspect.isfunction(method)):
-                        
+                    if (
+                        not method_name.startswith("_")
+                        and method_name not in skip_functions
+                        and callable(method)
+                        and inspect.isfunction(method)
+                    ):
+
                         # Create a wrapper function that calls the method
                         def create_method_wrapper(inst, meth):
                             # Get the original method signature
                             original_sig = inspect.signature(meth)
-                            
+
                             def wrapper(*args, **kwargs):
                                 return meth(inst, *args, **kwargs)
-                            
+
                             # Preserve the original method signature
                             wrapper.__signature__ = original_sig
                             return wrapper
-                        
+
                         wrapper_func = create_method_wrapper(instance, method)
                         wrapper_func.__name__ = method_name
                         wrapper_func.__doc__ = method.__doc__
-                        
+
                         # Register the wrapper as a tool
                         registry.tool(wrapper_func)
-                        
+
             except Exception as e:
                 print(f"Warning: Could not instantiate class {name}: {e}")
                 continue
-    
+
     print(f"Loaded {len(registry._tools)} tools from {file_path}")
+
+
+# =============================================================================
+# Common LLM Processing and Opik Utilities
+# =============================================================================
+
+
+def configure_opik(opik_mode: str = "hosted", project_name: str = "ez-mcp-toolbox"):
+    """
+    Configure Opik based on the specified mode.
+
+    Args:
+        opik_mode: Opik mode - "local", "hosted", or "disabled"
+        project_name: Project name for Opik tracking
+    """
+    if opik_mode == "disabled":
+        return
+
+    # Set the project name via environment variable
+    os.environ["OPIK_PROJECT_NAME"] = project_name
+
+    # Check if ~/.opik.config file exists
+    opik_config_path = os.path.expanduser("~/.opik.config")
+    if os.path.exists(opik_config_path):
+        print("✅ Found existing ~/.opik.config file, skipping opik.configure()")
+        return
+
+    try:
+        if opik_mode == "local":
+            opik.configure(use_local=True)
+        elif opik_mode == "hosted":
+            # For hosted mode, Opik will use environment variables or default configuration
+            opik.configure(use_local=False)
+        else:
+            print(f"Warning: Unknown Opik mode '{opik_mode}', using hosted mode")
+            opik.configure(use_local=False)
+
+        # Note: We don't use LiteLLM's OpikLogger as it creates separate traces
+        # Instead, we'll manually manage spans within the existing trace
+        print("✅ Opik configured for manual span management")
+
+    except Exception as e:
+        print(f"Warning: Opik configuration failed: {e}")
+        print("Continuing without Opik tracing...")
+
+
+@track(name="llm_completion", type="llm")
+def call_llm_with_tracing(
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    debug: bool = False,
+    console: Optional[Console] = None,
+    **kwargs,
+):
+    """
+    Call LLM with proper Opik span management.
+
+    Args:
+        model: LLM model to use
+        messages: List of messages for the LLM
+        tools: Optional list of tools for the LLM
+        debug: Whether to enable debug output
+        console: Rich console for output (optional)
+        **kwargs: Additional arguments for the LLM call
+
+    Returns:
+        LLM response object
+    """
+    from litellm import completion
+
+    try:
+        if debug:
+            if console:
+                console.print(f"🤖 Calling LLM: {model}")
+                console.print(f"📝 Messages count: {len(messages)}")
+                console.print(f"🔧 Tools count: {len(tools) if tools else 0}")
+                if kwargs:
+                    console.print(f"⚙️  Model kwargs: {kwargs}")
+            else:
+                print(f"🤖 Calling LLM: {model}")
+                print(f"📝 Messages count: {len(messages)}")
+                print(f"🔧 Tools count: {len(tools) if tools else 0}")
+                if kwargs:
+                    print(f"⚙️  Model kwargs: {kwargs}")
+
+        # Call the LLM - Opik will automatically track this as a span within the current trace
+        call_kwargs = kwargs.copy()
+        if tools:
+            call_kwargs.update({"tools": tools, "tool_choice": "auto"})
+
+        resp = completion(
+            model=model,
+            messages=messages,
+            **call_kwargs,
+        )
+
+        if debug:
+            if console:
+                console.print(f"📊 LLM response type: {type(resp)}")
+            else:
+                print(f"📊 LLM response type: {type(resp)}")
+
+        if resp is None:
+            if debug:
+                if console:
+                    console.print("❌ LLM returned None response")
+                else:
+                    print("❌ LLM returned None response")
+            raise ValueError("LLM returned None response")
+
+        if not hasattr(resp, "choices"):
+            if debug:
+                if console:
+                    console.print(
+                        f"❌ LLM response missing 'choices' attribute: {resp}"
+                    )
+                else:
+                    print(f"❌ LLM response missing 'choices' attribute: {resp}")
+            raise ValueError(f"LLM response missing 'choices' attribute: {resp}")
+
+        if debug:
+            if console:
+                console.print(f"✅ LLM response has {len(resp.choices)} choices")
+            else:
+                print(f"✅ LLM response has {len(resp.choices)} choices")
+
+        return resp
+
+    except Exception as e:
+        if debug:
+            if console:
+                console.print(f"❌ LLM call failed: {e}")
+                console.print(f"❌ Exception type: {type(e)}")
+            else:
+                print(f"❌ LLM call failed: {e}")
+                print(f"❌ Exception type: {type(e)}")
+        raise
+
+
+def extract_llm_content(resp, debug: bool = False, console: Optional[Console] = None):
+    """
+    Extract content from LLM response, handling both text and tool call responses.
+
+    Args:
+        resp: LLM response object
+        debug: Whether to enable debug output
+        console: Rich console for output (optional)
+
+    Returns:
+        Tuple of (content, tool_calls)
+    """
+    if not resp or not hasattr(resp, "choices"):
+        return None, None
+
+    choice = resp.choices[0].message
+    content = getattr(choice, "content", None)
+    tool_calls = getattr(choice, "tool_calls", None)
+
+    if debug:
+        if console:
+            if tool_calls:
+                console.print(f"🔧 LLM requested {len(tool_calls)} tool calls")
+            else:
+                console.print(
+                    f"✅ LLM returned text response: {len(content or '')} characters"
+                )
+        else:
+            if tool_calls:
+                print(f"🔧 LLM requested {len(tool_calls)} tool calls")
+            else:
+                print(f"✅ LLM returned text response: {len(content or '')} characters")
+
+    return content, tool_calls
+
+
+def create_llm_messages(
+    system_prompt: str,
+    user_input: str,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Create properly formatted messages for LLM calls.
+
+    Args:
+        system_prompt: System prompt for the LLM
+        user_input: User input text
+        conversation_history: Optional conversation history
+
+    Returns:
+        List of formatted messages
+    """
+    messages = [{"role": "system", "content": system_prompt}]
+
+    if conversation_history:
+        messages.extend(conversation_history)
+
+    messages.append({"role": "user", "content": user_input})
+
+    return messages
+
+
+def format_tool_result(tool_call_id: str, content: str) -> Dict[str, Any]:
+    """
+    Format tool execution result for LLM consumption.
+
+    Args:
+        tool_call_id: ID of the tool call
+        content: Result content from tool execution
+
+    Returns:
+        Formatted tool result message
+    """
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+
+
+def format_assistant_tool_calls(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Format assistant tool calls for conversation history.
+
+    Args:
+        tool_calls: List of tool calls made by assistant
+
+    Returns:
+        Formatted assistant message with tool calls
+    """
+    return {"role": "assistant", "tool_calls": tool_calls, "content": ""}

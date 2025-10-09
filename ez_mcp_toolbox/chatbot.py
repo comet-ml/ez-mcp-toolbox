@@ -31,6 +31,13 @@ from rich.text import Text
 from rich.status import Status
 from opik import track, opik_context
 import opik
+from .utils import (
+    configure_opik as configure_opik_util,
+    call_llm_with_tracing,
+    extract_llm_content,
+    format_tool_result,
+    format_assistant_tool_calls,
+)
 
 # Prompt toolkit imports for enhanced input handling
 from prompt_toolkit import prompt, PromptSession
@@ -45,35 +52,7 @@ load_dotenv()
 
 def configure_opik(opik_mode: str = "hosted"):
     """Configure Opik based on the specified mode."""
-    if opik_mode == "disabled":
-        return
-
-    # Set the project name via environment variable
-    os.environ["OPIK_PROJECT_NAME"] = "ez-mcp-chatbot"
-
-    # Check if ~/.opik.config file exists
-    opik_config_path = os.path.expanduser("~/.opik.config")
-    if os.path.exists(opik_config_path):
-        print("✅ Found existing ~/.opik.config file, skipping opik.configure()")
-        return
-
-    try:
-        if opik_mode == "local":
-            opik.configure(use_local=True)
-        elif opik_mode == "hosted":
-            # For hosted mode, Opik will use environment variables or default configuration
-            opik.configure(use_local=False)
-        else:
-            print(f"Warning: Unknown Opik mode '{opik_mode}', using hosted mode")
-            opik.configure(use_local=False)
-
-        # Note: We don't use LiteLLM's OpikLogger as it creates separate traces
-        # Instead, we'll manually manage spans within the existing trace
-        print("✅ Opik configured for manual span management")
-
-    except Exception as e:
-        print(f"Warning: Opik configuration failed: {e}")
-        print("Continuing without Opik tracing...")
+    configure_opik_util(opik_mode, "ez-mcp-chatbot")
 
 
 @dataclass
@@ -101,19 +80,6 @@ def _mcp_tools_to_openai_tools(tools_resp) -> List[Dict[str, Any]]:
             }
         )
     return tools
-
-
-def _mk_user_msg(text: str) -> Dict[str, Any]:
-    return {"role": "user", "content": text}
-
-
-def _mk_assistant_tool_msg(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
-    # Record the assistant's tool calls so the model has the chain
-    return {"role": "assistant", "tool_calls": tool_calls, "content": ""}
-
-
-def _mk_tool_result_msg(tool_call_id: str, content: str) -> Dict[str, Any]:
-    return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
 
 
 class ChatbotCompleter(Completer):
@@ -1343,42 +1309,15 @@ class MCPChatbot:
         **kwargs,
     ):
         """Call LLM with proper Opik span management."""
-        try:
-            if self.debug:
-                print(f"🤖 Calling LLM: {model}")
-                print(f"📝 Messages count: {len(messages)}")
-                print(f"🔧 Tools count: {len(tools) if tools else 0}")
-
-            # Call the LLM - Opik will automatically track this as a span within the current trace
-            resp = completion(
-                model=model,
-                messages=messages,
-                tools=tools if tools else None,
-                tool_choice="auto" if tools else "none",
-                **kwargs,
-            )
-
-            if self.debug:
-                print(f"📊 LLM response type: {type(resp)}")
-            if resp is None:
-                if self.debug:
-                    print("❌ LLM returned None response")
-                raise ValueError("LLM returned None response")
-
-            if not hasattr(resp, "choices"):
-                if self.debug:
-                    print(f"❌ LLM response missing 'choices' attribute: {resp}")
-                raise ValueError(f"LLM response missing 'choices' attribute: {resp}")
-
-            if self.debug:
-                print(f"✅ LLM response has {len(resp.choices)} choices")
-            return resp
-
-        except Exception as e:
-            if self.debug:
-                print(f"❌ LLM call failed: {e}")
-                print(f"❌ Exception type: {type(e)}")
-            raise
+        # Use the common utility function for consistent LLM processing
+        return call_llm_with_tracing(
+            model=model,
+            messages=messages,
+            tools=tools,
+            debug=self.debug,
+            console=None,  # Use print for chatbot to maintain consistency
+            **kwargs,
+        )
 
     @track
     async def chat_once(self, user_text: str) -> str:
@@ -1396,7 +1335,7 @@ class MCPChatbot:
         tools = await self._get_all_tools()
 
         # 2) Add user message to persistent history
-        user_msg = _mk_user_msg(user_text)
+        user_msg = {"role": "user", "content": user_text}
         self.messages.append(user_msg)
 
         # 3) Chat loop with tool calling using persistent messages
@@ -1419,21 +1358,14 @@ class MCPChatbot:
                         **self.model_kwargs,
                     )
 
-                choice = resp.choices[0].message
-                # If the model just replied with text (no tool calls), return it
-                tool_calls = getattr(choice, "tool_calls", None)
+                # Use common utility function to extract content and tool calls
+                content, tool_calls = extract_llm_content(resp, self.debug)
+
                 if not tool_calls:
-                    text_reply = (choice.content or "").strip()
-                    if self.debug:
-                        print(
-                            f"✅ LLM returned text response: {len(text_reply)} characters"
-                        )
+                    text_reply = (content or "").strip()
                     # Add assistant's final response to persistent history
                     self.messages.append({"role": "assistant", "content": text_reply})
                     break
-                else:
-                    if self.debug:
-                        print(f"🔧 LLM requested {len(tool_calls)} tool calls")
             except Exception as e:
                 if self.debug:
                     print(f"❌ LLM call failed in round {round_num + 1}: {e}")
@@ -1469,14 +1401,14 @@ class MCPChatbot:
                         },
                     }
                 )
-                executed_tool_msgs.append(_mk_tool_result_msg(tc.id, content_str))
+                executed_tool_msgs.append(format_tool_result(tc.id, content_str))
 
             # Add the assistant tool-call stub + tool results to persistent history
             if self.debug:
                 print(
                     f"📝 Adding {len(executed_tool_msgs)} tool results to conversation history"
                 )
-            self.messages.append(_mk_assistant_tool_msg(assistant_tool_stub))
+            self.messages.append(format_assistant_tool_calls(assistant_tool_stub))
             self.messages.extend(executed_tool_msgs)
             if self.debug:
                 print(f"📊 Total messages in history: {len(self.messages)}")
