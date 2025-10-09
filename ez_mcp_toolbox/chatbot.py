@@ -51,6 +51,12 @@ def configure_opik(opik_mode: str = "hosted"):
     # Set the project name via environment variable
     os.environ["OPIK_PROJECT_NAME"] = "ez-mcp-chatbot"
 
+    # Check if ~/.opik.config file exists
+    opik_config_path = os.path.expanduser("~/.opik.config")
+    if os.path.exists(opik_config_path):
+        print("✅ Found existing ~/.opik.config file, skipping opik.configure()")
+        return
+
     try:
         if opik_mode == "local":
             opik.configure(use_local=True)
@@ -68,8 +74,6 @@ def configure_opik(opik_mode: str = "hosted"):
     except Exception as e:
         print(f"Warning: Opik configuration failed: {e}")
         print("Continuing without Opik tracing...")
-
-
 
 
 @dataclass
@@ -310,9 +314,14 @@ class MCPChatbot:
         system_prompt: str,
         max_rounds: Optional[int] = 4,
         debug: bool = False,
+        model_override: Optional[str] = None,
     ):
         self.system_prompt = system_prompt
         self.servers, self.model, self.model_kwargs = self.load_config(config_path)
+
+        # Override model if provided
+        if model_override:
+            self.model = model_override
         self.max_rounds = max_rounds
         self.debug = debug
         self.sessions: Dict[str, ClientSession] = {}
@@ -1965,6 +1974,7 @@ Examples:
   ez-mcp-chatbot --opik disabled    # Disable Opik tracing
   ez-mcp-chatbot --init             # Create default config.json
   ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"  # Custom system prompt
+  ez-mcp-chatbot --model "openai/gpt-4"  # Override model from config
         """,
     )
 
@@ -1996,6 +2006,12 @@ Examples:
         help="Custom system prompt for the chatbot (overrides default)",
     )
 
+    parser.add_argument(
+        "--model",
+        type=str,
+        help="Override the model specified in the config file",
+    )
+
     return parser.parse_args()
 
 
@@ -2007,12 +2023,21 @@ async def main():
     configure_opik(args.opik)
 
     # Use provided system prompt or default
-    system_prompt = args.system_prompt if args.system_prompt else """
+    system_prompt = (
+        args.system_prompt
+        if args.system_prompt
+        else """
 You are a helpful AI system for answering questions that can be answered
 with any of the available tools.
 """
+    )
 
-    bot = MCPChatbot(args.config_path, system_prompt=system_prompt, debug=args.debug)
+    bot = MCPChatbot(
+        args.config_path,
+        system_prompt=system_prompt,
+        debug=args.debug,
+        model_override=args.model,
+    )
     await bot.run()
 
 
