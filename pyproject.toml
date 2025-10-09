@@ -71,6 +71,7 @@ Documentation = "https://github.com/comet-ml/ez-mcp-toolbox#readme"
 [project.scripts]
 ez-mcp-server = "ez_mcp_toolbox.server:main_sync"
 ez-mcp-chatbot = "ez_mcp_toolbox.chatbot:main_sync"
+ez-mcp-eval = "ez_mcp_toolbox.evaluator:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -2,10 +2,11 @@
 
 *A Comet ML Open Source Project*
 
-This Python toolbox contains two command-line easy to use utilities:
+This Python toolbox contains three command-line easy to use utilities:
 
 1. `ez-mcp-server` - turns a file of Python functions into a MCP server
 2. `ez-mcp-chatbot` - interactively debug MCP servers, with traces logged to [Opik](https://www.comet.com/site/products/opik/)
+3. `ez-mcp-eval` - evaluate LLM applications using Opik's evaluation framework
 
 ## Why?
 
@@ -21,11 +22,19 @@ pip install ez-mcp-toolbox --upgrade
 
 ## Quick start
 
+### Interactive Chat with MCP Tools
 ```
 ez-mcp-chatbot
 ```
 
 That will start a `ez-mcp-server` (using example tools below) and the `ez-mcp-chatbot` configured to use those tools.
+
+### Evaluate LLM Applications
+```
+ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination"
+```
+
+This will evaluate your LLM application using Opik's evaluation framework with your dataset and chosen metrics.
 
 ### Customize the chatbot
 
@@ -47,7 +56,7 @@ This interaction of the LLM with the MCP tools will be logged, and available for
 
 <img width="800" alt="chatbot interaction as logged to opik" src="https://github.com/user-attachments/assets/3ad0d79a-7f99-4211-aede-5e0cd81d80c3" />
 
-The rest of this file describes these two commands.
+The rest of this file describes these three commands.
 
 ## ez-mcp-server
 
@@ -288,6 +297,135 @@ ez-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --d
 - `--debug` - Enable debug output during processing
 - `--init` - Create a default config.json file and exit
 - `config_path` - Path to the configuration file (default: config.json)
+
+## ez-mcp-eval
+
+A command-line utility for evaluating LLM applications using Opik's evaluation framework. This tool provides a simple interface to run evaluations on datasets with various metrics, enabling you to measure and improve your LLM application's performance.
+
+### Features
+
+- **Dataset Evaluation**: Run evaluations on your datasets using Opik's evaluation framework
+- **Multiple Metrics**: Support for various evaluation metrics (Hallucination, LevenshteinRatio, etc.)
+- **Opik Integration**: Full integration with Opik for observability and tracking
+- **Flexible Configuration**: Customizable prompts, models, and evaluation parameters
+- **Rich Output**: Beautiful console output with progress tracking and results display
+
+### Basic Usage
+
+```bash
+ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination"
+```
+
+### Command-line Options
+
+```
+ez-mcp-eval [-h] --prompt PROMPT --dataset DATASET --metric METRIC 
+            [--experiment-name EXPERIMENT_NAME] [--opik {local,hosted,disabled}] 
+            [--debug] [--input INPUT] [--output OUTPUT] [--list-metrics] 
+            [--model MODEL] [--model-kwargs MODEL_KWARGS]
+```
+
+#### Required Arguments
+
+- `--prompt PROMPT` - The prompt to use for evaluation (can be a prompt name in Opik or direct text)
+- `--dataset DATASET` - Name of the dataset to evaluate on (must exist in Opik)
+- `--metric METRIC` - Name of the metric(s) to use for evaluation (comma-separated for multiple)
+
+#### Optional Arguments
+
+- `--experiment-name EXPERIMENT_NAME` - Name for the evaluation experiment (default: ez-mcp-evaluation)
+- `--opik {local,hosted,disabled}` - Opik tracing mode (default: hosted)
+- `--debug` - Enable debug output during processing
+- `--input INPUT` - Input field name in the dataset (default: input)
+- `--output OUTPUT` - Output field mapping in format reference=DATASET_FIELD (default: reference=answer)
+- `--list-metrics` - List all available metrics and exit
+- `--model MODEL` - LLM model to use for evaluation (default: gpt-3.5-turbo)
+- `--model-kwargs MODEL_KWARGS` - JSON string of additional keyword arguments for the LLM model
+
+### Examples
+
+#### Basic Evaluation
+```bash
+# Simple evaluation with Hallucination metric
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination"
+```
+
+#### Multiple Metrics
+```bash
+# Evaluate with multiple metrics
+ez-mcp-eval --prompt "Summarize this text" --dataset "summarization-dataset" --metric "Hallucination,LevenshteinRatio"
+```
+
+#### Custom Experiment Name
+```bash
+# Use a custom experiment name
+ez-mcp-eval --prompt "Translate to French" --dataset "translation-dataset" --metric "LevenshteinRatio" --experiment-name "french-translation-test"
+```
+
+#### Custom Model and Parameters
+```bash
+# Use a different model with custom parameters
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model "gpt-4" --model-kwargs '{"temperature": 0.7, "max_tokens": 1000}'
+```
+
+#### Custom Field Mappings
+```bash
+# Custom input and output field mappings
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --input "question" --output "reference=answer"
+```
+
+#### List Available Metrics
+```bash
+# See all available metrics
+ez-mcp-eval --list-metrics
+```
+
+#### Debug Mode
+```bash
+# Enable debug output for troubleshooting
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination" --debug
+```
+
+### Opik Integration
+
+The `ez-mcp-eval` tool integrates seamlessly with Opik for:
+
+- **Dataset Management**: Load datasets from your Opik workspace
+- **Prompt Management**: Use prompts stored in Opik or provide direct text
+- **Experiment Tracking**: Track evaluation experiments with custom names
+- **Observability**: Full tracing of LLM calls and evaluation processes
+
+### Environment Setup
+
+For Opik integration, set up your environment:
+
+```bash
+# For hosted Opik
+export OPIK_API_KEY=your_opik_api_key
+
+# For local Opik
+export OPIK_LOCAL_URL=http://localhost:8080
+```
+
+### Available Metrics
+
+The tool supports all metrics available in Opik's evaluation framework. Use `--list-metrics` to see the complete list, which includes:
+
+- **Hallucination**: Detect hallucinated content in responses
+- **LevenshteinRatio**: Measure text similarity using Levenshtein distance
+- **ExactMatch**: Check for exact string matches
+- **F1Score**: Calculate F1 score for classification tasks
+- And many more...
+
+### Output
+
+The tool provides rich console output including:
+
+- Progress tracking during evaluation
+- Dataset information and statistics
+- Evaluation results and metrics
+- Error handling and debugging information
+- Integration with Opik's experiment tracking
 
 ## License
 
