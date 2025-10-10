@@ -1083,7 +1083,7 @@ class MCPChatbot:
             )
             for server in self.servers:
                 self.console.print(
-                    f"  - [cyan]{server.name}[/cyan]: {server.description}"
+                    f"  - [cyan]{server['name']}[/cyan]: {server['description']}"
                 )
 
             await self.connect_all_servers()
