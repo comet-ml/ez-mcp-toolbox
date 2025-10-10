@@ -38,6 +38,7 @@ from .utils import (
     format_tool_result,
     format_assistant_tool_calls,
 )
+from .mcp_utils import MCPManager
 
 # Prompt toolkit imports for enhanced input handling
 from prompt_toolkit import prompt, PromptSession
@@ -55,31 +56,6 @@ def configure_opik(opik_mode: str = "hosted"):
     configure_opik_util(opik_mode, "ez-mcp-chatbot")
 
 
-@dataclass
-class ServerConfig:
-    name: str
-    description: str
-    command: str
-    args: Optional[List[str]] = None
-    env: Optional[Dict[str, str]] = None
-
-
-def _mcp_tools_to_openai_tools(tools_resp) -> List[Dict[str, Any]]:
-    # Map MCP tool spec to OpenAI function tools
-    tools = []
-    for t in tools_resp.tools:
-        tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description or "",
-                    # MCP provides a proper JSON schema in inputSchema
-                    "parameters": t.inputSchema or {"type": "object", "properties": {}},
-                },
-            }
-        )
-    return tools
 
 
 class ChatbotCompleter(Completer):
@@ -192,7 +168,7 @@ class ChatbotCompleter(Completer):
 
         # Chatbot-specific attributes that users might want to access
         self.chatbot_attributes = [
-            "self.sessions",
+            "self.mcp_manager.sessions",
             "self.model",
             "self.messages",
             "self.console",
@@ -283,6 +259,7 @@ class MCPChatbot:
         model_override: Optional[str] = None,
     ):
         self.system_prompt = system_prompt
+        self.config_path = config_path
         self.servers, self.model, self.model_kwargs = self.load_config(config_path)
 
         # Override model if provided
@@ -290,13 +267,13 @@ class MCPChatbot:
             self.model = model_override
         self.max_rounds = max_rounds
         self.debug = debug
-        self.sessions: Dict[str, ClientSession] = {}
-        self.processes: Dict[str, subprocess.Popen] = {}
-        self.exit_stack = AsyncExitStack()
         self.console = Console()
         # Generate unique thread-id for this chatbot instance
         self.thread_id = str(uuid.uuid4())
         self.clear_messages()
+
+        # Initialize MCP manager
+        self.mcp_manager = MCPManager(console=self.console, debug=debug)
 
         # Set up prompt_toolkit for enhanced input handling
         self._setup_prompt_toolkit()
@@ -343,7 +320,7 @@ class MCPChatbot:
     @staticmethod
     def load_config(
         config_path: str = "config.json",
-    ) -> tuple[List[ServerConfig], str, Dict[str, Any]]:
+    ) -> tuple[List, str, Dict[str, Any]]:
         """Load configuration from JSON file."""
         if os.path.exists(config_path):
             with open(config_path, "r") as f:
@@ -363,363 +340,18 @@ class MCPChatbot:
                 ],
             }
 
-        servers = []
-        for server_data in config.get("mcp_servers", []):
-            # Expand environment variables in env dict
-            env = server_data.get("env", {})
-            expanded_env = {}
-            for key, value in env.items():
-                if (
-                    isinstance(value, str)
-                    and value.startswith("${")
-                    and value.endswith("}")
-                ):
-                    env_var = value[2:-1]
-                    expanded_env[key] = os.getenv(env_var, "")
-                else:
-                    expanded_env[key] = value
-
-            servers.append(
-                ServerConfig(
-                    name=server_data["name"],
-                    description=server_data.get("description", ""),
-                    command=server_data["command"],
-                    args=server_data.get("args", []),
-                    env=expanded_env if expanded_env else None,
-                )
-            )
-
         # Extract model configuration
         model = config.get("model", "openai/gpt-4o-mini")
         model_kwargs = config.get("model_kwargs", {"temperature": 0.2})
 
-        return servers, model, model_kwargs
+        return config.get("mcp_servers", []), model, model_kwargs
 
     async def connect_all_servers(self):
         """Connect to all configured MCP servers via subprocess."""
-        for server_config in self.servers:
-            try:
-                await self._connect_server(server_config)
-                self.console.print(
-                    f"[green]✓[/green] Connected to [bold]{server_config.name}[/bold]: {server_config.description}"
-                )
-            except Exception as e:
-                self.console.print(
-                    f"[red]✗[/red] Failed to connect to [bold]{server_config.name}[/bold]: {e}"
-                )
-
-    async def _connect_server(self, server_config: ServerConfig):
-        """Connect to a single MCP server via subprocess."""
-        # Set up environment variables for the subprocess
-        if server_config.env:
-            # Update the current process environment for the subprocess
-            original_env = {}
-            for key, value in server_config.env.items():
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = value
-
-        try:
-            # Create MCP client session using stdio client
-            params = StdioServerParameters(
-                command=server_config.command,
-                args=server_config.args,
-            )
-
-            transport = await self.exit_stack.enter_async_context(stdio_client(params))
-            stdin, write = transport
-            session = await self.exit_stack.enter_async_context(
-                ClientSession(stdin, write)
-            )
-            await session.initialize()
-
-            self.sessions[server_config.name] = session
-        finally:
-            # Restore original environment variables
-            if server_config.env:
-                for key, original_value in original_env.items():
-                    if original_value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = original_value
-
-    async def _get_all_tools(self) -> List[Dict[str, Any]]:
-        """Aggregate tools from all connected MCP servers."""
-        all_tools = []
-        for server_name, session in self.sessions.items():
-            try:
-                tools_resp = await session.list_tools()
-                server_tools = _mcp_tools_to_openai_tools(tools_resp)
-                # Prefix tool names with server name to avoid conflicts
-                for tool in server_tools:
-                    tool["function"][
-                        "name"
-                    ] = f"{server_name}_{tool['function']['name']}"
-                all_tools.extend(server_tools)
-            except Exception as e:
-                self.console.print(
-                    f"[yellow]Warning:[/yellow] Failed to get tools from [bold]{server_name}[/bold]: {e}"
-                )
-        return all_tools
-
-    @track(name="execute_tool_call", type="tool")
-    async def _execute_tool_call(self, tool_call) -> str:
-        """Execute a tool call on the appropriate MCP server."""
-        fn_name = tool_call.function.name
-        args_raw = tool_call.function.arguments or "{}"
-        try:
-            args = json.loads(args_raw)
-        except json.JSONDecodeError:
-            args = {}
-
-        # Parse server name from tool name (format: server_name_tool_name)
-        if "_" in fn_name:
-            # Find the first underscore to split server name from tool name
-            parts = fn_name.split("_", 1)
-            if len(parts) == 2:
-                server_name, actual_tool_name = parts
-            else:
-                # Fallback: treat as tool name without server prefix
-                server_name = None
-                actual_tool_name = fn_name
-        else:
-            # Fallback: try to find the tool in any server
-            server_name = None
-            actual_tool_name = fn_name
-
-        if server_name and server_name in self.sessions:
-            session = self.sessions[server_name]
-        else:
-            # Try to find the tool in any connected server
-            session = None
-            for srv_name, sess in self.sessions.items():
-                try:
-                    tools_resp = await sess.list_tools()
-                    tool_names = [t.name for t in tools_resp.tools]
-                    if actual_tool_name in tool_names:
-                        session = sess
-                        break
-                except Exception:
-                    continue
-
-            if session is None:
-                return f"Error: Tool '{actual_tool_name}' not found in any connected server"
-
-        try:
-            # Log tool call start with input details
-            if self.debug:
-                print(f"🔧 Calling tool: {actual_tool_name} with args: {args}")
-
-            # Call the MCP tool
-            result = await session.call_tool(actual_tool_name, args)
-
-            # Best-effort stringify of MCP result content
-            if hasattr(result, "content") and result.content is not None:
-                try:
-                    content_data = result.content
-                    if self.debug:
-                        print(f"🔍 Content data type: {type(content_data)}")
-                        print(
-                            f"🔍 Content data keys: {content_data.keys() if isinstance(content_data, dict) else 'Not a dict'}"
-                        )
-
-                    # Check if this is an ImageResult
-                    if isinstance(content_data, list) and len(content_data) > 0:
-                        # Check if the first item is text content with image data
-                        first_item = content_data[0]
-                        if hasattr(first_item, "text"):
-                            try:
-                                # Try to parse the text as JSON
-                                text_data = json.loads(first_item.text)
-                                if (
-                                    isinstance(text_data, dict)
-                                    and text_data.get("type") == "image_result"
-                                    and "image_base64" in text_data
-                                ):
-                                    # Handle image result specially
-                                    if self.debug:
-                                        print(
-                                            f"🖼️  Detected image result from {actual_tool_name}"
-                                        )
-                                    return self._handle_image_result(
-                                        text_data, actual_tool_name
-                                    )
-                            except (json.JSONDecodeError, AttributeError):
-                                pass
-                        # If not an image, convert to string
-                        if self.debug:
-                            print(f"📝 Converting content to string")
-                        content_str = str(content_data)
-                    elif (
-                        isinstance(content_data, dict)
-                        and content_data.get("type") == "image_result"
-                        and "image_base64" in content_data
-                    ):
-                        # Handle image result specially
-                        if self.debug:
-                            print(f"🖼️  Detected image result from {actual_tool_name}")
-                        return self._handle_image_result(content_data, actual_tool_name)
-                    else:
-                        if self.debug:
-                            print(f"📝 Converting content to JSON string")
-                        content_str = json.dumps(content_data, separators=(",", ":"))
-                except Exception as e:
-                    if self.debug:
-                        print(f"❌ Error processing content: {e}")
-                    content_str = str(result.content)
-            else:
-                if self.debug:
-                    print(f"📝 Converting result to string")
-                content_str = str(result)
-
-            # Log tool call result
-            if self.debug:
-                print(f"✅ Tool {actual_tool_name} completed successfully")
-                print(f"📊 Result length: {len(content_str)} characters")
-
-            # Check for excessively large results
-            max_result_size = 10 * 1024 * 1024  # 10MB limit
-            if len(content_str) > max_result_size:
-                if self.debug:
-                    print(
-                        f"⚠️  Large result detected: {len(content_str):,} characters (limit: {max_result_size:,})"
-                    )
-                return (
-                    f"⚠️ **Large result from {actual_tool_name}**\n\n"
-                    f"📊 **Result Info:**\n"
-                    f"- Size: {len(content_str):,} characters\n"
-                    f"- Tool: {actual_tool_name}\n"
-                    f"- Status: Completed successfully\n\n"
-                    f"*Note: Result too large to display inline. Consider using a different approach or tool.*"
-                )
-
-            # The @track decorator will automatically capture:
-            # - Function name (actual_tool_name)
-            # - Input arguments (args)
-            # - Output result (content_str)
-            # - Execution time
-            # - Success/failure status
-
-            return content_str
-        except Exception as e:
-            if self.debug:
-                print(f"❌ Tool {actual_tool_name} failed: {e}")
-            # The @track decorator will capture the error details
-            return f"Error executing tool '{actual_tool_name}': {e}"
-
-    def _handle_image_result(self, image_data: Dict[str, Any], tool_name: str) -> str:
-        """Handle image results by saving to temporary file and returning file reference."""
-        try:
-            # Decode base64 image data
-            image_base64 = image_data.get("image_base64", "")
-            content_type = image_data.get("content_type", "image/png")
-
-            if not image_base64:
-                return f"Error: No image data received from {tool_name}"
-
-            # Decode base64 to bytes to get image info
-            image_bytes = base64.b64decode(image_base64)
-
-            # Create PIL Image from bytes to get dimensions
-            image = Image.open(io.BytesIO(image_bytes))
-
-            # Resize image to 400x300 pixels to keep them small for display
-            resized_image = image.resize((400, 300), Image.Resampling.LANCZOS)
-
-            # Convert back to bytes for saving
-            output_buffer = io.BytesIO()
-            resized_image.save(output_buffer, format="PNG")
-            image_bytes = output_buffer.getvalue()
-
-            # Update the image object to the resized version
-            image = resized_image
-
-            # Determine file extension from content type
-            file_ext = ".png"  # default
-            if "jpeg" in content_type or "jpg" in content_type:
-                file_ext = ".jpg"
-            elif "gif" in content_type:
-                file_ext = ".gif"
-            elif "bmp" in content_type:
-                file_ext = ".bmp"
-            elif "tiff" in content_type:
-                file_ext = ".tiff"
-
-            # Create a temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
-                tmp_file.write(image_bytes)
-                tmp_path = tmp_file.name
-
-            # Log the image creation
-            if self.debug:
-                print(f"🖼️ Image created by {tool_name}")
-                print(f"📊 Image size: {len(image_bytes)} bytes")
-                print(
-                    f"📐 Image dimensions: {image.size[0]}x{image.size[1]} pixels (resized to 400x300)"
-                )
-                print(f"💾 Image saved to: {tmp_path}")
-
-            # Clean up the path for display (remove sandbox: prefix if present)
-            if self.debug:
-                print(f"🔍 Original tmp_path: {tmp_path}")
-            display_path = tmp_path
-            if tmp_path.startswith("sandbox:"):
-                display_path = tmp_path[8:]  # Remove "sandbox:" prefix
-                if self.debug:
-                    print(f"🔍 Cleaned display_path: {display_path}")
-            else:
-                if self.debug:
-                    print(f"🔍 No sandbox prefix found, using original: {display_path}")
-
-            # Try to display image directly in console if supported
-            try:
-                import subprocess
-                import shutil
-
-                # Check if we're in a terminal that supports image display
-                if shutil.which("kitty"):
-                    # Kitty supports inline images
-                    if self.debug:
-                        print(f"🖼️ Displaying image in terminal...")
-                    subprocess.run(
-                        ["kitty", "+kitten", "icat", display_path], check=False
-                    )
-                    image_displayed = True
-                elif shutil.which("wezterm"):
-                    # WezTerm supports images
-                    if self.debug:
-                        print(f"🖼️ Displaying image in terminal...")
-                    subprocess.run(["wezterm", "imgcat", display_path], check=False)
-                    image_displayed = True
-                else:
-                    image_displayed = False
-            except Exception:
-                image_displayed = False
-
-            if image_displayed:
-                return (
-                    f"🖼️ **Image created by {tool_name}**\n\n"
-                    f"📊 **Image Details:**\n"
-                    f"- Size: {len(image_bytes):,} bytes\n"
-                    f"- Dimensions: {image.size[0]}x{image.size[1]} pixels\n"
-                    f"- Format: {content_type}\n"
-                    f"- Saved to: `{display_path}`"
-                )
-            else:
-                # Simple fallback - just show the image info
-                return (
-                    f"🖼️ **Image created by {tool_name}**\n\n"
-                    f"📊 **Image Details:**\n"
-                    f"- Size: {len(image_bytes):,} bytes\n"
-                    f"- Dimensions: {image.size[0]}x{image.size[1]} pixels\n"
-                    f"- Format: {content_type}\n"
-                    f"- Saved to: `{display_path}`\n\n"
-                    f"💡 **Image saved successfully** - Click [Plot]({display_path}) to view"
-                )
-
-        except Exception as e:
-            if self.debug:
-                print(f"❌ Failed to handle image result from {tool_name}: {e}")
-            return f"Error processing image from {tool_name}: {e}"
+        # Load MCP configuration and connect
+        servers = self.mcp_manager.load_mcp_config(self.config_path)
+        if servers:
+            await self.mcp_manager.connect_all_servers(servers)
 
     def _execute_python_code(self, code: str) -> str:
         """Execute Python code with persistent environment."""
@@ -862,13 +494,13 @@ class MCPChatbot:
                 server_name, tool_name = tool_identifier.split(".", 1)
 
                 # Check if server exists
-                if server_name not in self.sessions:
-                    available_servers = list(self.sessions.keys())
+                if server_name not in self.mcp_manager.sessions:
+                    available_servers = list(self.mcp_manager.sessions.keys())
                     return f"Error: Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
 
                 # Create async function to call the tool
                 async def _call_tool():
-                    session = self.sessions[server_name]
+                    session = self.mcp_manager.sessions[server_name]
                     try:
                         result = await session.call_tool(tool_name, kwargs)
 
@@ -947,13 +579,13 @@ class MCPChatbot:
                 server_name, tool_name = tool_identifier.split(".", 1)
 
                 # Check if server exists
-                if server_name not in self.sessions:
-                    available_servers = list(self.sessions.keys())
+                if server_name not in self.mcp_manager.sessions:
+                    available_servers = list(self.mcp_manager.sessions.keys())
                     return f"Error: Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
 
                 # Create async function to call the tool
                 async def _call_tool():
-                    session = self.sessions[server_name]
+                    session = self.mcp_manager.sessions[server_name]
                     try:
                         result = await session.call_tool(tool_name, kwargs)
 
@@ -1015,7 +647,7 @@ class MCPChatbot:
             try:
                 # If no server specified, show all servers and their tools
                 if server_name is None:
-                    if not self.sessions:
+                    if not self.mcp_manager.sessions:
                         self.console.print(
                             "[bold red]No MCP servers connected[/bold red]"
                         )
@@ -1027,9 +659,9 @@ class MCPChatbot:
                     # Create async function to get all tools for all servers
                     async def _get_all_tools_data():
                         all_data = []
-                        for srv_name in self.sessions.keys():
+                        for srv_name in self.mcp_manager.sessions.keys():
                             try:
-                                session = self.sessions[srv_name]
+                                session = self.mcp_manager.sessions[srv_name]
                                 tools_resp = await session.list_tools()
 
                                 server_data = {
@@ -1117,8 +749,8 @@ class MCPChatbot:
                     return None
 
                 # Check if server exists
-                if server_name not in self.sessions:
-                    available_servers = list(self.sessions.keys())
+                if server_name not in self.mcp_manager.sessions:
+                    available_servers = list(self.mcp_manager.sessions.keys())
                     self.console.print("[bold red]## Error[/bold red]")
                     self.console.print(
                         f"Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
@@ -1127,7 +759,7 @@ class MCPChatbot:
 
                 # Create async function to get tools for specific server
                 async def _get_tools_data():
-                    session = self.sessions[server_name]
+                    session = self.mcp_manager.sessions[server_name]
                     try:
                         tools_resp = await session.list_tools()
 
@@ -1211,13 +843,13 @@ class MCPChatbot:
                 server_name, tool_name = tool_identifier.split(".", 1)
 
                 # Check if server exists
-                if server_name not in self.sessions:
-                    available_servers = list(self.sessions.keys())
+                if server_name not in self.mcp_manager.sessions:
+                    available_servers = list(self.mcp_manager.sessions.keys())
                     return f"Error: Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
 
                 # Create async function to get tool info
                 async def _get_tool_info():
-                    session = self.sessions[server_name]
+                    session = self.mcp_manager.sessions[server_name]
                     try:
                         tools_resp = await session.list_tools()
 
@@ -1321,7 +953,7 @@ class MCPChatbot:
 
     @track
     async def chat_once(self, user_text: str) -> str:
-        if not self.sessions:
+        if not self.mcp_manager.sessions:
             raise RuntimeError("Not connected to any MCP servers.")
 
         # Update Opik context with thread_id for conversation grouping
@@ -1332,7 +964,7 @@ class MCPChatbot:
             pass
 
         # 1) Fetch tool catalog from all MCP servers
-        tools = await self._get_all_tools()
+        tools = await self.mcp_manager._get_all_tools()
 
         # 2) Add user message to persistent history
         user_msg = {"role": "user", "content": user_text}
@@ -1385,7 +1017,7 @@ class MCPChatbot:
                     f"[bold blue]Executing {tc.function.name}...[/bold blue]",
                     spinner="dots",
                 ):
-                    content_str = await self._execute_tool_call(tc)
+                    content_str = await self.mcp_manager.execute_tool_call(tc)
 
                 if self.debug:
                     print(f"📊 Tool result length: {len(content_str)} characters")
@@ -1456,14 +1088,14 @@ class MCPChatbot:
 
             await self.connect_all_servers()
 
-            if not self.sessions:
+            if not self.mcp_manager.sessions:
                 self.console.print(
                     "[red]No servers connected successfully. Exiting.[/red]"
                 )
                 return
 
             self.console.print(
-                f"\n[green]Connected to {len(self.sessions)} server(s). Ready for chat![/green]"
+                f"\n[green]Connected to {len(self.mcp_manager.sessions)} server(s). Ready for chat![/green]"
             )
             debug_status = "enabled" if self.debug else "disabled"
             self.console.print(f"[dim]Debug mode: {debug_status}[/dim]")
@@ -1563,14 +1195,14 @@ class MCPChatbot:
             await self.close()
 
     async def close(self):
-        await self.exit_stack.aclose()
+        await self.mcp_manager.close()
 
     async def _handle_show_tools(self, server_name: str = None):
         """Handle /show tools and /show tools NAME commands."""
         try:
             # If no server specified, show all servers and their tools
             if server_name is None:
-                if not self.sessions:
+                if not self.mcp_manager.sessions:
                     self.console.print("[bold red]No MCP servers connected[/bold red]")
                     self.console.print(
                         "Use `!list_available_tools()` to see connection status."
@@ -1580,9 +1212,9 @@ class MCPChatbot:
                 # Create async function to get all tools for all servers
                 async def _get_all_tools_data():
                     all_data = []
-                    for srv_name in self.sessions.keys():
+                    for srv_name in self.mcp_manager.sessions.keys():
                         try:
-                            session = self.sessions[srv_name]
+                            session = self.mcp_manager.sessions[srv_name]
                             tools_resp = await session.list_tools()
 
                             server_data = {"name": srv_name, "tools": [], "error": None}
@@ -1662,8 +1294,8 @@ class MCPChatbot:
                 return
 
             # Check if server exists
-            if server_name not in self.sessions:
-                available_servers = list(self.sessions.keys())
+            if server_name not in self.mcp_manager.sessions:
+                available_servers = list(self.mcp_manager.sessions.keys())
                 self.console.print("[bold red]## Error[/bold red]")
                 self.console.print(
                     f"Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
@@ -1672,7 +1304,7 @@ class MCPChatbot:
 
             # Create async function to get tools for specific server
             async def _get_tools_data():
-                session = self.sessions[server_name]
+                session = self.mcp_manager.sessions[server_name]
                 try:
                     tools_resp = await session.list_tools()
 
@@ -1753,8 +1385,8 @@ class MCPChatbot:
             server_name, tool_name = tool_identifier.split(".", 1)
 
             # Check if server exists
-            if server_name not in self.sessions:
-                available_servers = list(self.sessions.keys())
+            if server_name not in self.mcp_manager.sessions:
+                available_servers = list(self.mcp_manager.sessions.keys())
                 self.console.print(
                     f"[red]Error: Server '{server_name}' not found. Available servers: {', '.join(available_servers)}[/red]"
                 )
@@ -1771,7 +1403,7 @@ class MCPChatbot:
                     kwargs[f"arg_{len(kwargs)}"] = arg
 
             # Call the tool
-            session = self.sessions[server_name]
+            session = self.mcp_manager.sessions[server_name]
             try:
                 self.console.print(
                     f"[blue]🔧 Calling tool: {tool_name} with args: {kwargs}[/blue]"
@@ -1818,15 +1450,15 @@ class MCPChatbot:
             result = "Available MCP Servers and Tools:\n"
 
             # Get tools from each connected server
-            for server_name, session in self.sessions.items():
+            for server_name, session in self.mcp_manager.sessions.items():
                 result += f"\n📡 Server: {server_name}\n"
                 result += f"   Status: Connected\n"
-                result += f"   To get tools: await self.sessions['{server_name}'].list_tools()\n"
+                result += f"   To get tools: await self.mcp_manager.sessions['{server_name}'].list_tools()\n"
 
             result += "\n🔧 Quick Tool Examples:\n"
-            result += "   await self.sessions['ez-mcp-server'].call_tool('list_experiments', {'limit': 5})\n"
-            result += "   await self.sessions['ez-mcp-server'].call_tool('list_projects', {})\n"
-            result += "   await self.sessions['ez-mcp-server'].call_tool('get_session_info', {'random_string': 'test'})\n"
+            result += "   await self.mcp_manager.sessions['ez-mcp-server'].call_tool('list_experiments', {'limit': 5})\n"
+            result += "   await self.mcp_manager.sessions['ez-mcp-server'].call_tool('list_projects', {})\n"
+            result += "   await self.mcp_manager.sessions['ez-mcp-server'].call_tool('get_session_info', {'random_string': 'test'})\n"
 
             result += "\n💡 To see all tools:\n"
             result += "   await self._get_all_tools()\n"
@@ -1852,10 +1484,10 @@ class MCPChatbot:
         import asyncio
 
         async def _call_tool():
-            if server_name not in self.sessions:
-                return f"Error: Server '{server_name}' not found. Available: {list(self.sessions.keys())}"
+            if server_name not in self.mcp_manager.sessions:
+                return f"Error: Server '{server_name}' not found. Available: {list(self.mcp_manager.sessions.keys())}"
 
-            session = self.sessions[server_name]
+            session = self.mcp_manager.sessions[server_name]
             try:
                 result = await session.call_tool(tool_name, kwargs)
                 return result
