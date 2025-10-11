@@ -118,7 +118,7 @@ to run from inside a system that will dynamically start the server (see below).
 ### Command-line Options
 
 ```
-ez-mcp-server [-h] [--transport {stdio,sse}] [--host HOST] [--port PORT] [tools_file]
+ez-mcp-server [-h] [--transport {stdio,sse}] [--host HOST] [--port PORT] [--include INCLUDE] [--exclude EXCLUDE] [tools_file]
 ```
 
 Positional arguments:
@@ -129,6 +129,32 @@ Options:
   * `--transport {stdio,sse}` - Transport method to use (default: `stdio`)
   * `--host HOST` - Host for SSE transport (default: `localhost`)
   * `--port PORT` - Port for SSE transport (default: `8000`)
+  * `--include INCLUDE` - Python regex pattern to include only matching tool names
+  * `--exclude EXCLUDE` - Python regex pattern to exclude matching tool names
+
+### Tool Filtering
+
+You can control which tools are loaded using the `--include` and `--exclude` flags with Python regex patterns:
+
+```bash
+# Include only tools with "add" or "multiply" in the name
+ez-mcp-server my_tools.py --include "add|multiply"
+
+# Exclude tools with "greet" or "time" in the name  
+ez-mcp-server my_tools.py --exclude "greet|time"
+
+# Use both filters together
+ez-mcp-server my_tools.py --include ".*number.*" --exclude ".*square.*"
+
+# Use with default tools
+ez-mcp-server --include "add" --exclude "greet"
+```
+
+**Filtering Logic:**
+- The `--include` filter is applied first, keeping only tools whose names match the regex pattern
+- The `--exclude` filter is then applied, removing any tools whose names match the regex pattern
+- Both filters can be used together for fine-grained control
+- Invalid regex patterns will cause the server to exit with an error message
 
 # Ez MCP Chatbot
 

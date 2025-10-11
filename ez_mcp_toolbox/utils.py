@@ -215,6 +215,42 @@ class ToolRegistry:
         except Exception as e:
             return [{"type": "text", "text": f"Error calling tool {name}: {str(e)}"}]
 
+    def filter_tools(
+        self,
+        include_pattern: Optional[str] = None,
+        exclude_pattern: Optional[str] = None,
+    ) -> None:
+        """
+        Filter tools based on include and exclude regex patterns.
+
+        Args:
+            include_pattern: Python regex pattern to include only matching tool names
+            exclude_pattern: Python regex pattern to exclude matching tool names
+        """
+        import re
+
+        tools_to_remove = []
+
+        for tool_name in self._tools.keys():
+            should_remove = False
+
+            # Apply include filter
+            if include_pattern:
+                if not re.search(include_pattern, tool_name):
+                    should_remove = True
+
+            # Apply exclude filter
+            if exclude_pattern:
+                if re.search(exclude_pattern, tool_name):
+                    should_remove = True
+
+            if should_remove:
+                tools_to_remove.append(tool_name)
+
+        # Remove filtered tools
+        for tool_name in tools_to_remove:
+            del self._tools[tool_name]
+
 
 # Global registry instance
 registry = ToolRegistry()

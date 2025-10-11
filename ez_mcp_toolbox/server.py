@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import signal
 import sys
 from typing import Any, Dict, List, Optional, Set
@@ -85,6 +86,16 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=8000,
         help="Port for SSE transport (default: 8000)",
+    )
+    parser.add_argument(
+        "--include",
+        type=str,
+        help="Python regex pattern to include only matching tool names",
+    )
+    parser.add_argument(
+        "--exclude",
+        type=str,
+        help="Python regex pattern to exclude matching tool names",
     )
     return parser.parse_args()
 
@@ -225,6 +236,17 @@ async def main() -> None:
     except Exception as e:
         print(f"❌ Failed to load tools from {args.tools_file}: {e}")
         sys.exit(1)
+
+    # Apply tool filtering if specified
+    if args.include or args.exclude:
+        try:
+            registry.filter_tools(args.include, args.exclude)
+            print(
+                f"✓ Applied tool filtering (include: {args.include}, exclude: {args.exclude})"
+            )
+        except re.error as e:
+            print(f"❌ Invalid regex pattern: {e}")
+            sys.exit(1)
 
     # Initialize session context
     try:
