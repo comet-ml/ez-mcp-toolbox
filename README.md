@@ -187,9 +187,9 @@ Create a default configuration file:
 ez-mcp-chatbot --init
 ```
 
-This creates a `config.json` file with default settings.
+This creates a `ez-config.json` file with default settings.
 
-Edit `config.json` to specify your model and MCP servers. For example:
+Edit `ez-config.json` to specify your model and MCP servers. For example:
 
 ```json
 {
@@ -327,8 +327,8 @@ ez-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --d
 - `--opik {local,hosted,disabled}` - Opik tracing mode (default: hosted)
 - `--system-prompt TEXT` - Custom system prompt for the chatbot (overrides default)
 - `--debug` - Enable debug output during processing
-- `--init` - Create a default config.json file and exit
-- `config_path` - Path to the configuration file (default: config.json)
+- `--init` - Create a default ez-config.json file and exit
+- `config_path` - Path to the configuration file (default: ez-config.json)
 
 ## ez-mcp-eval
 

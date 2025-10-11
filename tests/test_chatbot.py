@@ -63,7 +63,7 @@ class TestChatbot:
                     mock_completion.return_value = mock_llm_response
 
                     chatbot = MCPChatbot(
-                        "config.json", 
+                        "ez-config.json", 
                         system_prompt="You are a helpful AI assistant.",
                         max_rounds=2
                     )
@@ -111,7 +111,7 @@ class TestChatbot:
         from rich.console import Console
         
         # Create a chatbot instance
-        chatbot = MCPChatbot("config.json", system_prompt="You are a helpful AI assistant.")
+        chatbot = MCPChatbot("ez-config.json", system_prompt="You are a helpful AI assistant.")
         
         # Verify that Rich console is initialized
         assert hasattr(chatbot, 'console')
@@ -137,7 +137,7 @@ class TestChatbot:
         import uuid
         
         # Create a chatbot instance
-        chatbot = MCPChatbot("config.json", system_prompt="You are a helpful AI assistant.")
+        chatbot = MCPChatbot("ez-config.json", system_prompt="You are a helpful AI assistant.")
         
         # Verify that thread_id is generated
         assert hasattr(chatbot, 'thread_id')

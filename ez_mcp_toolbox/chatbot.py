@@ -296,7 +296,7 @@ class MCPChatbot:
 
     @staticmethod
     def load_config(
-        config_path: str = "config.json",
+        config_path: str = "ez-config.json",
     ) -> tuple[List, str, Dict[str, Any]]:
         """Load configuration from JSON file."""
         if os.path.exists(config_path):
@@ -1484,8 +1484,8 @@ class MCPChatbot:
             return asyncio.run(_call_tool())
 
 
-def create_default_config(config_path: str = "config.json") -> None:
-    """Create a default config.json file with example configuration."""
+def create_default_config(config_path: str = "ez-config.json") -> None:
+    """Create a default ez-config.json file with example configuration."""
     default_config = {
         "model": "openai/gpt-4o-mini",
         "model_kwargs": {"temperature": 0.0},
@@ -1516,10 +1516,10 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  ez-mcp-chatbot config.json        # Use specific config
+  ez-mcp-chatbot ez-config.json     # Use specific config
   ez-mcp-chatbot --opik hosted      # Use hosted Opik instance
   ez-mcp-chatbot --opik disabled    # Disable Opik tracing
-  ez-mcp-chatbot --init             # Create default config.json
+  ez-mcp-chatbot --init             # Create default ez-config.json
   ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"  # Custom system prompt
   ez-mcp-chatbot --model "openai/gpt-4"  # Override model from config
         """,
@@ -1528,8 +1528,8 @@ Examples:
     parser.add_argument(
         "config_path",
         nargs="?",
-        default="config.json",
-        help="Path to the configuration file (default: config.json)",
+        default="ez-config.json",
+        help="Path to the configuration file (default: ez-config.json)",
     )
 
     parser.add_argument(
@@ -1540,7 +1540,9 @@ Examples:
     )
 
     parser.add_argument(
-        "--init", action="store_true", help="Create a default config.json file and exit"
+        "--init",
+        action="store_true",
+        help="Create a default ez-config.json file and exit",
     )
 
     parser.add_argument(

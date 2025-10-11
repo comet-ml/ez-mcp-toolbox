@@ -485,7 +485,7 @@ Examples:
     parser.add_argument(
         "--mcp-config",
         type=str,
-        help="Path to MCP server configuration file (default: config.json)",
+        help="Path to MCP server configuration file (default: ez-config.json)",
     )
 
     return parser.parse_args()

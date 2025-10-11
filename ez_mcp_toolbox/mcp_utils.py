@@ -39,7 +39,9 @@ class MCPManager:
         self.exit_stack = AsyncExitStack()
         self.thread_id = str(uuid.uuid4())
 
-    def load_mcp_config(self, config_path: str = "config.json") -> List[ServerConfig]:
+    def load_mcp_config(
+        self, config_path: str = "ez-config.json"
+    ) -> List[ServerConfig]:
         """Load MCP server configuration from JSON file."""
         if os.path.exists(config_path):
             with open(config_path, "r") as f:
