@@ -334,7 +334,7 @@ ez-mcp-eval [-h] --prompt PROMPT --dataset DATASET --metric METRIC
 #### Required Arguments
 
 - `--prompt PROMPT` - The prompt to use for evaluation (can be a prompt name in Opik or direct text)
-- `--dataset DATASET` - Name of the dataset to evaluate on (must exist in Opik)
+- `--dataset DATASET` - Name of the dataset to evaluate on (must exist in Opik or opik_optimizer.datasets)
 - `--metric METRIC` - Name of the metric(s) to use for evaluation (comma-separated for multiple)
 
 #### Optional Arguments
@@ -347,6 +347,15 @@ ez-mcp-eval [-h] --prompt PROMPT --dataset DATASET --metric METRIC
 - `--list-metrics` - List all available metrics and exit
 - `--model MODEL` - LLM model to use for evaluation (default: gpt-3.5-turbo)
 - `--model-kwargs MODEL_KWARGS` - JSON string of additional keyword arguments for the LLM model
+
+### Dataset Loading
+
+The `ez-mcp-eval` command supports loading datasets from two sources:
+
+1. **Opik datasets**: If the dataset exists in your Opik account, it will be loaded directly
+2. **opik_optimizer.datasets**: If the dataset is not found in Opik, the tool will automatically check for a function with the same name in `opik_optimizer.datasets` and create the dataset using that function
+
+This allows you to use both pre-existing Opik datasets and dynamically generated datasets from the `opik_optimizer` package.
 
 ### Examples
 
@@ -372,6 +381,12 @@ ez-mcp-eval --prompt "Translate to French" --dataset "translation-dataset" --met
 ```bash
 # Use a different model with custom parameters
 ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model "gpt-4" --model-kwargs '{"temperature": 0.7, "max_tokens": 1000}'
+```
+
+#### Using opik_optimizer Datasets
+```bash
+# Use a dataset from opik_optimizer.datasets (automatically created if not in Opik)
+ez-mcp-eval --prompt "Answer the question" --dataset "my_optimizer_dataset" --metric "Hallucination"
 ```
 
 #### Custom Field Mappings

@@ -70,9 +70,33 @@ class MCPEvaluator:
             self.client = Opik()
 
             self.console.print(f"📊 Loading dataset: {self.config.dataset}")
-            self.dataset = self.client.get_dataset(name=self.config.dataset)
 
-            self.console.print("✅ Dataset loaded successfully")
+            # First try to get the dataset from opik
+            try:
+                self.dataset = self.client.get_dataset(name=self.config.dataset)
+                self.console.print("✅ Dataset loaded successfully from Opik")
+            except Exception as opik_error:
+                # If dataset not found in opik, try opik_optimizer.datasets
+                self.console.print(f"⚠️  Dataset not found in Opik: {opik_error}")
+                self.console.print("🔍 Checking opik_optimizer.datasets...")
+
+                import opik_optimizer.datasets as optimizer_datasets
+
+                # Check if the dataset function exists in opik_optimizer.datasets
+                if hasattr(optimizer_datasets, self.config.dataset):
+                    dataset_func = getattr(optimizer_datasets, self.config.dataset)
+                    self.console.print(
+                        f"📦 Creating dataset using opik_optimizer.datasets.{self.config.dataset}"
+                    )
+                    self.dataset = dataset_func()
+                    self.console.print(
+                        "✅ Dataset created successfully from opik_optimizer"
+                    )
+                else:
+                    raise AttributeError(
+                        f"Dataset function '{self.config.dataset}' not found in opik_optimizer.datasets"
+                    )
+
             self.console.print(f"   - Dataset name: {self.config.dataset}")
             if self.dataset is not None:
                 self.console.print(

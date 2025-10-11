@@ -4,6 +4,7 @@ python-dotenv>=1.0.0
 httpx>=0.25.0
 typing-extensions>=4.0.0
 opik>=0.1.0
+opik_optimizer>=0.1.0
 matplotlib>=3.5.0
 pillow>=9.0.0
 fastapi>=0.100.0

@@ -45,6 +45,7 @@ dependencies = [
     "nest-asyncio>=1.5.0",
     "pillow>=9.0.0",
     "opik>=0.1.0",
+    "opik_optimizer>=0.1.0",
     "matplotlib>=3.5.0",
 ]
 
