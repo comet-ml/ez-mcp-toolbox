@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Simple demo MCP server for testing the multi-server client.
-This server provides basic math operations as tools.
-"""
-
 import argparse
 import asyncio
 import json

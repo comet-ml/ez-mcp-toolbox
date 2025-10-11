@@ -1,7 +1,3 @@
-# python client.py [config.json]
-# Example: python client.py config.json
-# If no config file is provided, uses config.json by default
-
 import asyncio
 import sys
 import json
