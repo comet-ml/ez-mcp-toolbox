@@ -2,31 +2,16 @@ import asyncio
 import sys
 import json
 import os
-import subprocess
 import uuid
 import argparse
-import base64
-import tempfile
 import io
 import traceback
-from contextlib import AsyncExitStack
 from typing import Optional, List, Dict, Any
-from dataclasses import dataclass
-from PIL import Image
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from litellm import completion  # can handle tools
-from litellm.integrations.opik.opik import OpikLogger
-import litellm
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.text import Text
-from rich.status import Status
 from opik import track, opik_context
-import opik
 from .utils import (
     configure_opik as configure_opik_util,
     call_llm_with_tracing,
@@ -37,27 +22,23 @@ from .utils import (
 from .mcp_utils import MCPManager
 
 # Prompt toolkit imports for enhanced input handling
-from prompt_toolkit import prompt, PromptSession
+from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.completion import Completer, Completion, WordCompleter
-from prompt_toolkit.completion import merge_completers
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.shortcuts import confirm
 
 load_dotenv()
 
 
-def configure_opik(opik_mode: str = "hosted"):
+def configure_opik(opik_mode: str = "hosted") -> None:
     """Configure Opik based on the specified mode."""
     configure_opik_util(opik_mode, "ez-mcp-chatbot")
-
-
 
 
 class ChatbotCompleter(Completer):
     """Custom completer for the chatbot with command and Python code completion."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Basic commands
         self.commands = ["/clear", "quit", "exit", "help"]
 
@@ -205,10 +186,10 @@ class ChatbotCompleter(Completer):
             'get_tools("server_name")',
         ]
 
-    def get_completions(self, document, complete_event):
+    def get_completions(self, document: Any, complete_event: Any) -> Any:
         """Provide completions based on the current input."""
         text = document.text
-        word = document.get_word_before_cursor()
+        # word = document.get_word_before_cursor()  # Unused variable
 
         # Command completions (for commands starting with / or basic commands)
         if text.startswith("/") or text in ["quit", "exit", "help"]:
@@ -253,7 +234,7 @@ class MCPChatbot:
         max_rounds: Optional[int] = 4,
         debug: bool = False,
         model_override: Optional[str] = None,
-    ):
+    ) -> None:
         self.system_prompt = system_prompt
         self.config_path = config_path
         self.servers, self.model, self.model_kwargs = self.load_config(config_path)
@@ -423,7 +404,7 @@ class MCPChatbot:
                                     return f"🐍 Result: {repr(result)}"
                                 else:
                                     return "🐍 Python code executed successfully (no output)"
-                        except:
+                        except Exception:
                             # If last part isn't an expression, execute it too
                             exec(parts[-1].strip(), exec_globals)
                             output = captured_output.getvalue()
@@ -448,7 +429,7 @@ class MCPChatbot:
                 # Restore stdout
                 sys.stdout = old_stdout
 
-        except Exception as e:
+        except Exception:
             # Get the full traceback for better error reporting
             error_msg = traceback.format_exc()
             return f"🐍 Python Error:\n{error_msg}"
@@ -660,7 +641,7 @@ class MCPChatbot:
                                 session = self.mcp_manager.sessions[srv_name]
                                 tools_resp = await session.list_tools()
 
-                                server_data = {
+                                server_data: Dict[str, Any] = {
                                     "name": srv_name,
                                     "tools": [],
                                     "error": None,
@@ -780,7 +761,7 @@ class MCPChatbot:
 
                     nest_asyncio.apply()
                     tools_data = asyncio.run(_get_tools_data())
-                except Exception as e:
+                except Exception:
                     # Fallback: try to run in a new thread with new event loop
                     import concurrent.futures
 
@@ -869,7 +850,7 @@ class MCPChatbot:
                             hasattr(target_tool, "inputSchema")
                             and target_tool.inputSchema
                         ):
-                            info += f"\nParameters:\n"
+                            info += "\nParameters:\n"
                             if "properties" in target_tool.inputSchema:
                                 for param_name, param_info in target_tool.inputSchema[
                                     "properties"
@@ -969,7 +950,8 @@ class MCPChatbot:
         # 3) Chat loop with tool calling using persistent messages
         text_reply: str = ""
 
-        for round_num in range(self.max_rounds):
+        max_rounds = self.max_rounds or 4
+        for round_num in range(max_rounds):
             try:
                 if self.debug:
                     print(f"🔄 LLM call round {round_num + 1}/{self.max_rounds}")
@@ -1168,7 +1150,7 @@ class MCPChatbot:
                     python_code = q[1:].strip()  # Remove the ! prefix
                     if python_code:
                         result = self._execute_python_code(python_code)
-                        self.console.print(f"\n[bold green]Python:[/bold green]")
+                        self.console.print("\n[bold green]Python:[/bold green]")
                         self.console.print(result)
                     else:
                         self.console.print(
@@ -1213,7 +1195,11 @@ class MCPChatbot:
                             session = self.mcp_manager.sessions[srv_name]
                             tools_resp = await session.list_tools()
 
-                            server_data = {"name": srv_name, "tools": [], "error": None}
+                            server_data: Dict[str, Any] = {
+                                "name": srv_name,
+                                "tools": [],
+                                "error": None,
+                            }
 
                             if tools_resp.tools:
                                 for tool in tools_resp.tools:
@@ -1325,7 +1311,7 @@ class MCPChatbot:
 
                 nest_asyncio.apply()
                 tools_data = asyncio.run(_get_tools_data())
-            except Exception as e:
+            except Exception:
                 # Fallback: try to run in a new thread with new event loop
                 import concurrent.futures
 
@@ -1426,7 +1412,7 @@ class MCPChatbot:
                 self.console.print(
                     f"[green]✅ Tool {tool_name} completed successfully[/green]"
                 )
-                self.console.print(f"[green]📊 Result:[/green]")
+                self.console.print("[green]📊 Result:[/green]")
                 self.console.print(content_str)
 
             except Exception as e:
@@ -1448,7 +1434,7 @@ class MCPChatbot:
             # Get tools from each connected server
             for server_name, session in self.mcp_manager.sessions.items():
                 result += f"\n📡 Server: {server_name}\n"
-                result += f"   Status: Connected\n"
+                result += "   Status: Connected\n"
                 result += f"   To get tools: await self.mcp_manager.sessions['{server_name}'].list_tools()\n"
 
             result += "\n🔧 Quick Tool Examples:\n"
@@ -1491,13 +1477,14 @@ class MCPChatbot:
                 return f"Error calling tool '{tool_name}': {e}"
 
         try:
-            loop = asyncio.get_running_loop()
+            # loop = asyncio.get_running_loop()  # Unused variable
+            asyncio.get_running_loop()
             return "Use await session.call_tool() in async context"
         except RuntimeError:
             return asyncio.run(_call_tool())
 
 
-def create_default_config(config_path: str = "config.json"):
+def create_default_config(config_path: str = "config.json") -> None:
     """Create a default config.json file with example configuration."""
     default_config = {
         "model": "openai/gpt-4o-mini",
@@ -1522,7 +1509,7 @@ def create_default_config(config_path: str = "config.json"):
     )
 
 
-def parse_arguments():
+def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="MCP Chatbot with Opik tracing support",
@@ -1601,7 +1588,7 @@ with any of the available tools.
     await bot.run()
 
 
-def main_sync():
+def main_sync() -> None:
     """Synchronous entry point that handles event loop conflicts."""
     try:
         # Parse arguments first to handle --help and --init without async issues

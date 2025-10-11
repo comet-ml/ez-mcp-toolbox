@@ -100,8 +100,14 @@ Then run the server with your custom tools:
 ez-mcp-server my_tools.py
 ```
 
+You can also load tools from installed Python modules:
+
+```bash
+ez-mcp-server opik_optimizer.utils.core
+```
+
 The server will automatically:
-- Load all functions from your file (no ez_mcp_toolbox imports required)
+- Load all functions from your file or module (no ez_mcp_toolbox imports required)
 - Convert them to MCP tools
 - Generate JSON schemas from your function signatures
 - Use your docstrings as tool descriptions
@@ -116,7 +122,7 @@ ez-mcp-server [-h] [--transport {stdio,sse}] [--host HOST] [--port PORT] [tools_
 ```
 
 Positional arguments:
-  * `tools_file` - Path to the tools file containing functions to serve as MCP tools (default: tools.py)
+  * `tools_file` - Path to tools file or module name (e.g., 'my_tools.py' or 'opik_optimizer.utils.core') (default: tools.py)
 
 Options:
   * `-h`, `--help` - show this help message and exit

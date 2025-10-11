@@ -3,7 +3,6 @@
 Shared MCP utilities for both chatbot and evaluator.
 """
 
-import asyncio
 import json
 import os
 import subprocess
@@ -21,6 +20,7 @@ from opik import track
 @dataclass
 class ServerConfig:
     """Configuration for an MCP server."""
+
     name: str
     description: str
     command: str
@@ -30,7 +30,7 @@ class ServerConfig:
 
 class MCPManager:
     """Shared MCP server management functionality."""
-    
+
     def __init__(self, console: Optional[Console] = None, debug: bool = False):
         self.console = console or Console()
         self.debug = debug
@@ -89,7 +89,7 @@ class MCPManager:
         """Connect to all configured MCP servers via subprocess."""
         if not servers:
             return
-            
+
         for server_config in servers:
             try:
                 await self._connect_server(server_config)
@@ -144,9 +144,9 @@ class MCPManager:
                 server_tools = _mcp_tools_to_openai_tools(tools_resp)
                 # Prefix tool names with server name to avoid conflicts
                 for tool in server_tools:
-                    tool["function"][
-                        "name"
-                    ] = f"{server_name}_{tool['function']['name']}"
+                    tool["function"]["name"] = (
+                        f"{server_name}_{tool['function']['name']}"
+                    )
                 all_tools.extend(server_tools)
             except Exception as e:
                 self.console.print(
@@ -235,7 +235,7 @@ class MCPManager:
                                 pass
                         # If not an image, convert to string
                         if self.debug:
-                            print(f"📝 Converting content to string")
+                            print("📝 Converting content to string")
                         content_str = str(content_data)
                     elif (
                         isinstance(content_data, dict)
@@ -248,7 +248,7 @@ class MCPManager:
                         return f"Image result from {actual_tool_name} (base64 data)"
                     else:
                         if self.debug:
-                            print(f"📝 Converting content to JSON string")
+                            print("📝 Converting content to JSON string")
                         content_str = json.dumps(content_data, separators=(",", ":"))
                 except Exception as e:
                     if self.debug:
@@ -256,7 +256,7 @@ class MCPManager:
                     content_str = str(result.content)
             else:
                 if self.debug:
-                    print(f"📝 Converting result to string")
+                    print("📝 Converting result to string")
                 content_str = str(result)
 
             # Log tool call result

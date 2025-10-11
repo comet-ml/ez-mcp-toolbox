@@ -9,26 +9,25 @@ using Opik's evaluation framework.
 import argparse
 import asyncio
 import json
-import os
 import sys
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
-from opik import Opik, track
+from opik import Opik
 from opik.evaluation import evaluate
 from opik.evaluation import metrics
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 from dotenv import load_dotenv
-from litellm import completion
-import litellm
-from .utils import configure_opik, call_llm_with_tracing, extract_llm_content, format_tool_result, format_assistant_tool_calls
+from .utils import (
+    configure_opik,
+    call_llm_with_tracing,
+    extract_llm_content,
+    format_tool_result,
+    format_assistant_tool_calls,
+)
 from .mcp_utils import MCPManager
 
 load_dotenv()
-
-
 
 
 @dataclass
@@ -56,29 +55,29 @@ class MCPEvaluator:
     def __init__(self, config: EvaluationConfig):
         self.config = config
         self.console = Console()
-        self.client = None
-        self.dataset = None
+        self.client: Optional[Any] = None
+        self.dataset: Optional[Any] = None
         self.mcp_manager = MCPManager(console=self.console, debug=config.debug)
 
-    def configure_opik(self):
+    def configure_opik(self) -> None:
         """Configure Opik based on the specified mode."""
         configure_opik(self.config.opik_mode, "ez-mcp-eval")
 
-
-    def setup_client_and_dataset(self):
+    def setup_client_and_dataset(self) -> None:
         """Initialize Opik client and load dataset."""
         try:
-            self.console.print(f"🔗 Connecting to Opik...")
+            self.console.print("🔗 Connecting to Opik...")
             self.client = Opik()
 
             self.console.print(f"📊 Loading dataset: {self.config.dataset}")
             self.dataset = self.client.get_dataset(name=self.config.dataset)
 
-            self.console.print(f"✅ Dataset loaded successfully")
+            self.console.print("✅ Dataset loaded successfully")
             self.console.print(f"   - Dataset name: {self.config.dataset}")
-            self.console.print(
-                f"   - Items count: {len(self.dataset) if hasattr(self.dataset, '__len__') else 'Unknown'}"
-            )
+            if self.dataset is not None:
+                self.console.print(
+                    f"   - Items count: {len(self.dataset) if hasattr(self.dataset, '__len__') else 'Unknown'}"
+                )
 
         except Exception as e:
             self.console.print(
@@ -86,23 +85,29 @@ class MCPEvaluator:
             )
             raise
 
-    def resolve_prompt(self, prompt_value):
+    def resolve_prompt(self, prompt_value: str) -> str:
         """Resolve prompt by first checking Opik for a prompt with that name, then fallback to direct value."""
         try:
             # First try to get the prompt from Opik by name
             self.console.print(f"🔍 Looking up prompt '{prompt_value}' in Opik...")
+            if self.client is None:
+                raise RuntimeError("Opik client not initialized")
             prompt = self.client.get_prompt(name=prompt_value)
 
             # If found, use the prompt content
             prompt_content = prompt.prompt if hasattr(prompt, "prompt") else str(prompt)
-            
+
             # If the prompt content is None, empty, or the string 'None', fall back to the original prompt value
-            if prompt_content is None or prompt_content == "" or prompt_content == "None":
+            if (
+                prompt_content is None
+                or prompt_content == ""
+                or prompt_content == "None"
+            ):
                 self.console.print(
-                    f"⚠️  Prompt found in Opik but content is None/empty/'None', using original prompt value"
+                    "⚠️  Prompt found in Opik but content is None/empty/'None', using original prompt value"
                 )
                 return prompt_value
-            
+
             self.console.print(
                 f"✅ Found prompt in Opik: {prompt_content[:100]}{'...' if len(prompt_content) > 100 else ''}"
             )
@@ -115,11 +120,11 @@ class MCPEvaluator:
             )
             return prompt_value
 
-    def create_evaluation_task(self, resolved_prompt):
+    def create_evaluation_task(self, resolved_prompt: str) -> Any:
         """Create the evaluation task function."""
         # Use the provided resolved prompt
 
-        async def evaluation_task(dataset_item):
+        async def evaluation_task(dataset_item: Any) -> Dict[str, Any]:
             """Evaluation task that will be called for each dataset item."""
             try:
                 if self.config.debug:
@@ -129,7 +134,11 @@ class MCPEvaluator:
                 input_value = dataset_item.get(self.config.input_field)
 
                 # Get available MCP tools
-                tools = await self.mcp_manager._get_all_tools() if self.mcp_manager.sessions else None
+                tools = (
+                    await self.mcp_manager._get_all_tools()
+                    if self.mcp_manager.sessions
+                    else None
+                )
 
                 # Call the LLM with the resolved prompt and input, including MCP tools
                 try:
@@ -145,48 +154,65 @@ class MCPEvaluator:
                         console=self.console,
                         **self.config.model_kwargs if self.config.model_kwargs else {},
                     )
-                    
+
                     # Extract content and tool calls
                     content, tool_calls = extract_llm_content(resp, self.config.debug)
-                    
+
                     # If there are tool calls, execute them
                     if tool_calls:
                         if self.config.debug:
-                            self.console.print(f"🔧 Executing {len(tool_calls)} tool calls")
-                        
+                            self.console.print(
+                                f"🔧 Executing {len(tool_calls)} tool calls"
+                            )
+
                         # Execute each tool call
                         tool_results = []
                         for tool_call in tool_calls:
                             if self.config.debug:
-                                self.console.print(f"🔧 Executing tool: {tool_call.function.name}")
-                            
-                            tool_result = await self.mcp_manager.execute_tool_call(tool_call)
-                            tool_results.append(format_tool_result(tool_call.id, tool_result))
-                        
+                                self.console.print(
+                                    f"🔧 Executing tool: {tool_call.function.name}"
+                                )
+
+                            tool_result = await self.mcp_manager.execute_tool_call(
+                                tool_call
+                            )
+                            tool_results.append(
+                                format_tool_result(tool_call.id, tool_result)
+                            )
+
                         # Make another LLM call with tool results
                         messages = [
                             {"role": "system", "content": resolved_prompt},
                             {"role": "user", "content": str(input_value)},
-                            format_assistant_tool_calls([{
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments or "{}",
-                                },
-                            } for tc in tool_calls]),
+                            format_assistant_tool_calls(
+                                [
+                                    {
+                                        "id": tc.id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": tc.function.name,
+                                            "arguments": tc.function.arguments or "{}",
+                                        },
+                                    }
+                                    for tc in tool_calls
+                                ]
+                            ),
                         ]
                         messages.extend(tool_results)
-                        
+
                         # Final LLM call with tool results
                         final_resp = call_llm_with_tracing(
                             model=self.config.model,
                             messages=messages,
                             debug=self.config.debug,
                             console=self.console,
-                            **self.config.model_kwargs if self.config.model_kwargs else {},
+                            **self.config.model_kwargs
+                            if self.config.model_kwargs
+                            else {},
                         )
-                        final_content, _ = extract_llm_content(final_resp, self.config.debug)
+                        final_content, _ = extract_llm_content(
+                            final_resp, self.config.debug
+                        )
                         response = final_content or content or ""
                     else:
                         response = content or ""
@@ -207,7 +233,7 @@ class MCPEvaluator:
 
         return evaluation_task
 
-    def get_metrics(self):
+    def get_metrics(self) -> List[Any]:
         """Get the metrics to use for evaluation."""
         metric_names = [name.strip() for name in self.config.metric.split(",")]
         metric_instances = []
@@ -231,10 +257,10 @@ class MCPEvaluator:
 
         return metric_instances
 
-    async def run_evaluation(self):
+    async def run_evaluation(self) -> Any:
         """Run the evaluation using Opik."""
         try:
-            self.console.print(f"🚀 Starting evaluation...")
+            self.console.print("🚀 Starting evaluation...")
             self.console.print(f"   - Experiment: {self.config.experiment_name}")
             self.console.print(f"   - Dataset: {self.config.dataset}")
             self.console.print(f"   - Metric: {self.config.metric}")
@@ -260,16 +286,20 @@ class MCPEvaluator:
 
             # Since evaluation_task is now async, we need to handle it properly
             # For now, we'll create a wrapper that handles the async call
-            def sync_evaluation_task(dataset_item):
+            def sync_evaluation_task(dataset_item: Any) -> Dict[str, Any]:
                 """Synchronous wrapper for async evaluation task."""
                 import asyncio
+
                 try:
-                    loop = asyncio.get_running_loop()
+                    # loop = asyncio.get_running_loop()  # Unused variable
+                    asyncio.get_running_loop()
                     # We're in an async context, create a task
-                    task = loop.create_task(evaluation_task(dataset_item))
+                    # task = loop.create_task(evaluation_task(dataset_item))  # Unused variable
                     # For now, we'll need to handle this differently
                     # This is a limitation - we need to make the evaluation process async
-                    return {"llm_output": "Async evaluation not yet fully supported in this context"}
+                    return {
+                        "llm_output": "Async evaluation not yet fully supported in this context"
+                    }
                 except RuntimeError:
                     # No event loop, we can use asyncio.run
                     return asyncio.run(evaluation_task(dataset_item))
@@ -296,7 +326,7 @@ class MCPEvaluator:
             self.console.print(f"❌ Evaluation failed: {e}")
             raise
 
-    def display_results(self, results):
+    def display_results(self, results: Any) -> None:
         """Display evaluation results."""
         self.console.print("\n" + "=" * 60)
         self.console.print("📊 EVALUATION RESULTS", style="bold blue")
@@ -318,7 +348,7 @@ class MCPEvaluator:
 
         self.console.print("\n✅ Evaluation completed successfully!")
 
-    async def run(self):
+    async def run(self) -> None:
         """Run the complete evaluation process."""
         try:
             # Configure Opik
@@ -354,7 +384,7 @@ class MCPEvaluator:
                 await self.mcp_manager.close()
 
 
-def parse_arguments():
+def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="ez-mcp-eval: Evaluate LLM applications using Opik",
@@ -437,7 +467,7 @@ Examples:
     return parser.parse_args()
 
 
-def parse_field_mapping(mapping_str):
+def parse_field_mapping(mapping_str: str) -> tuple[str, str]:
     """Parse field mapping in format REFERENCE=QUESTION."""
     if "=" not in mapping_str:
         raise ValueError(
@@ -448,7 +478,7 @@ def parse_field_mapping(mapping_str):
     return reference.strip(), question.strip()
 
 
-def parse_output_mapping(mapping_str):
+def parse_output_mapping(mapping_str: str) -> tuple[str, str]:
     """Parse output mapping in format reference=DATASET_FIELD."""
     if "=" not in mapping_str:
         raise ValueError(
@@ -459,7 +489,7 @@ def parse_output_mapping(mapping_str):
     return reference.strip(), dataset_field.strip()
 
 
-def list_available_metrics():
+def list_available_metrics() -> List[str]:
     """List all available metrics from opik.evaluation.metrics."""
     available_metrics = [
         name
@@ -469,7 +499,7 @@ def list_available_metrics():
     return sorted(available_metrics)
 
 
-def main():
+def main() -> None:
     """Main entry point for ez-mcp-eval."""
     args = parse_arguments()
 
@@ -515,16 +545,17 @@ def main():
 
     # Create and run evaluator
     evaluator = MCPEvaluator(config)
-    
+
     # Handle async execution
     try:
         import nest_asyncio
+
         nest_asyncio.apply()
         asyncio.run(evaluator.run())
     except Exception:
         # Fallback: try to run in a new thread with new event loop
         import concurrent.futures
-        
+
         def run_in_thread():
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
@@ -532,7 +563,7 @@ def main():
                 return new_loop.run_until_complete(evaluator.run())
             finally:
                 new_loop.close()
-        
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(run_in_thread)
             future.result()

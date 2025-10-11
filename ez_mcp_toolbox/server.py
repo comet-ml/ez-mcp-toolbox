@@ -4,14 +4,14 @@ import json
 import os
 import signal
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set
 
 from mcp import Tool
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
 # Import our registry and session management
-from .utils import registry, load_tools_from_file
+from .utils import registry, load_tools_from_file, load_tools_from_module
 from .session import initialize_session
 
 # SSE transport imports
@@ -23,10 +23,10 @@ import uvicorn
 server = Server("ez-mcp-server")
 
 # Global variable to track server state for clean shutdown
-_server_task = None
+_server_task: Optional[asyncio.Task[None]] = None
 
 
-def load_default_tools():
+def load_default_tools() -> None:
     """Load the default example tools from the README."""
     from .utils import registry
 
@@ -60,14 +60,14 @@ def load_default_tools():
     registry.tool(greet_user)
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Ez MCP Server")
     parser.add_argument(
         "tools_file",
         nargs="?",
         default="tools.py",
-        help="Path to the tools file containing functions to serve as MCP tools (default: tools.py)",
+        help="Path to tools file or module name (e.g., 'my_tools.py' or 'opik_optimizer.utils.core') (default: tools.py)",
     )
     parser.add_argument(
         "--transport",
@@ -105,15 +105,15 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Dict[str, Any]
 app = FastAPI(title="Ez MCP Server", version="1.0.0")
 
 # Global variables for SSE communication
-_sse_clients = set()
-_message_queue = asyncio.Queue()
+_sse_clients: Set[int] = set()
+_message_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
 
 
 @app.get("/sse")
-async def sse_endpoint():
+async def sse_endpoint() -> StreamingResponse:
     """SSE endpoint for server-to-client communication."""
 
-    async def event_generator():
+    async def event_generator() -> Any:
         # Add client to the set
         client_id = id(asyncio.current_task())
         _sse_clients.add(client_id)
@@ -146,7 +146,7 @@ async def sse_endpoint():
 
 
 @app.post("/messages")
-async def message_endpoint(request: Request):
+async def message_endpoint(request: Request) -> Dict[str, Any]:
     """HTTP POST endpoint for client-to-server communication."""
     try:
         data = await request.json()
@@ -167,12 +167,12 @@ async def message_endpoint(request: Request):
 
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> Dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy", "transport": "sse"}
 
 
-async def start_sse_server(host: str, port: int):
+async def start_sse_server(host: str, port: int) -> None:
     """Start the SSE server."""
     print(f"🚀 Starting SSE server on {host}:{port}")
     print(f"📡 SSE endpoint: http://{host}:{port}/sse")
@@ -184,16 +184,16 @@ async def start_sse_server(host: str, port: int):
     await server_instance.serve()
 
 
-def signal_handler(signum, frame):
+def signal_handler(signum: int, frame: Any) -> None:
     """Handle shutdown signals gracefully."""
     print("\n🛑 Received shutdown signal, cleaning up...")
     if _server_task and not _server_task.done():
         _server_task.cancel()
     # Force immediate exit to avoid waiting for stdin
-    os._exit(0)
+    os._exit(0)  # This never returns
 
 
-async def main():
+async def main() -> None:
     """Run the server."""
     global _server_task
 
@@ -208,15 +208,20 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Load tools from the specified file or use default tools
+    # Load tools from the specified source or use default tools
     try:
         if args.tools_file == "tools.py" and not os.path.exists(args.tools_file):
             # No tools file provided and default doesn't exist, load example tools
             load_default_tools()
             print("✓ Loaded default example tools from README")
-        else:
+        elif args.tools_file.endswith(".py"):
+            # Treat as file path
             load_tools_from_file(args.tools_file)
             print(f"✓ Loaded tools from {args.tools_file}")
+        else:
+            # Treat as module name
+            load_tools_from_module(args.tools_file)
+            print(f"✓ Loaded tools from module {args.tools_file}")
     except Exception as e:
         print(f"❌ Failed to load tools from {args.tools_file}: {e}")
         sys.exit(1)
@@ -261,7 +266,7 @@ async def main():
         raise
 
 
-def main_sync():
+def main_sync() -> None:
     """Synchronous entry point for the ez-mcp command."""
     asyncio.run(main())
 

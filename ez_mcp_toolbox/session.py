@@ -3,28 +3,25 @@
 Session management for MCP server.
 """
 
-from contextlib import contextmanager
-from typing import Optional, Generator
-
 
 class SessionContext:
     """Context manager for general session management."""
-    
-    def __init__(self):
+
+    def __init__(self) -> None:
         self._initialized = False
-    
-    def initialize(self):
+
+    def initialize(self) -> None:
         """Initialize the session context."""
         if self._initialized:
             return
-        
+
         self._initialized = True
-    
+
     def is_initialized(self) -> bool:
         """Check if the session is initialized."""
         return self._initialized
-    
-    def reset(self):
+
+    def reset(self) -> None:
         """Reset the session (useful for testing or reconfiguration)."""
         self._initialized = False
 
@@ -33,7 +30,7 @@ class SessionContext:
 session_context = SessionContext()
 
 
-def initialize_session():
+def initialize_session() -> None:
     """Initialize the global session context."""
     session_context.initialize()
 

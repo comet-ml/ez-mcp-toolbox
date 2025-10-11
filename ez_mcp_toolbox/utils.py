@@ -8,7 +8,6 @@ import json
 import importlib.util
 import sys
 import os
-from datetime import datetime
 from typing import Any, Dict, List, Callable, Optional, Union
 from mcp import Tool
 from rich.console import Console
@@ -19,10 +18,10 @@ import opik
 class ToolRegistry:
     """Registry for managing MCP tools with automatic parameter generation."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._tools: Dict[str, Dict[str, Any]] = {}
 
-    def tool(self, func_or_name=None, description: Optional[str] = None):
+    def tool(self, func_or_name: Any = None, description: Optional[str] = None) -> Any:
         """
         Decorator to register a function as an MCP tool.
 
@@ -80,7 +79,10 @@ class ToolRegistry:
             description = self._get_param_description(func, param_name)
 
             # Create the property schema
-            property_schema = {"type": param_type, "description": description}
+            property_schema: Dict[str, Any] = {
+                "type": param_type,
+                "description": description,
+            }
 
             # Handle array types - add items schema
             if param_type == "array":
@@ -160,7 +162,7 @@ class ToolRegistry:
             line = line.strip()
             if (
                 line.startswith(f"{param_name}:")
-                or line.startswith(f"Args:")
+                or line.startswith("Args:")
                 and param_name in line
             ):
                 # Extract description after colon
@@ -219,7 +221,7 @@ registry = ToolRegistry()
 
 
 # Tool decorator for easy registration
-def tool(func_or_name=None, description: Optional[str] = None):
+def tool(func_or_name: Any = None, description: Optional[str] = None) -> Any:
     """Decorator to register a function as an MCP tool."""
     return registry.tool(func_or_name, description)
 
@@ -266,7 +268,6 @@ def load_tools_from_file(file_path: str) -> None:
             and name in module.__dict__
             and obj.__module__ == module.__name__
         ):
-
             # Create an instance of the class
             try:
                 instance = obj()
@@ -279,17 +280,16 @@ def load_tools_from_file(file_path: str) -> None:
                         and callable(method)
                         and inspect.isfunction(method)
                     ):
-
                         # Create a wrapper function that calls the method
-                        def create_method_wrapper(inst, meth):
+                        def create_method_wrapper(inst: Any, meth: Any) -> Any:
                             # Get the original method signature
                             original_sig = inspect.signature(meth)
 
-                            def wrapper(*args, **kwargs):
+                            def wrapper(*args: Any, **kwargs: Any) -> Any:
                                 return meth(inst, *args, **kwargs)
 
                             # Preserve the original method signature
-                            wrapper.__signature__ = original_sig
+                            wrapper.__signature__ = original_sig  # type: ignore
                             return wrapper
 
                         wrapper_func = create_method_wrapper(instance, method)
@@ -306,12 +306,91 @@ def load_tools_from_file(file_path: str) -> None:
     print(f"Loaded {len(registry._tools)} tools from {file_path}")
 
 
+def load_tools_from_module(module_name: str) -> None:
+    """
+    Load tools from a Python module by name and register them with the global registry.
+    Supports both standalone functions and class methods.
+
+    Args:
+        module_name: Name of the module to load (e.g., 'opik_optimizer.utils.core')
+    """
+    # Clear existing tools
+    registry._tools.clear()
+
+    try:
+        # Import the module
+        module = importlib.import_module(module_name)
+    except ImportError as e:
+        raise ImportError(f"Could not import module '{module_name}': {e}")
+
+    # Skip utility functions and classes
+    skip_functions = {"TypedDict"}
+
+    # First, look for standalone functions
+    for name, obj in inspect.getmembers(module):
+        if (
+            inspect.isfunction(obj)
+            and not name.startswith("_")
+            and name not in skip_functions
+        ):
+            # Register the function as a tool
+            registry.tool(obj)
+
+    # Then, look for classes with methods that can be used as tools
+    for name, obj in inspect.getmembers(module):
+        if (
+            inspect.isclass(obj)
+            and not name.startswith("_")
+            and name not in skip_functions
+            and name in module.__dict__
+            and obj.__module__ == module.__name__
+        ):
+            # Create an instance of the class
+            try:
+                instance = obj()
+
+                # Find all methods in the class - only those defined in the class itself
+                for method_name, method in instance.__class__.__dict__.items():
+                    if (
+                        not method_name.startswith("_")
+                        and method_name not in skip_functions
+                        and callable(method)
+                        and inspect.isfunction(method)
+                    ):
+                        # Create a wrapper function that calls the method
+                        def create_method_wrapper(inst: Any, meth: Any) -> Any:
+                            # Get the original method signature
+                            original_sig = inspect.signature(meth)
+
+                            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                                return meth(inst, *args, **kwargs)
+
+                            # Preserve the original method signature
+                            wrapper.__signature__ = original_sig  # type: ignore
+                            return wrapper
+
+                        wrapper_func = create_method_wrapper(instance, method)
+                        wrapper_func.__name__ = method_name
+                        wrapper_func.__doc__ = method.__doc__
+
+                        # Register the wrapper as a tool
+                        registry.tool(wrapper_func)
+
+            except Exception as e:
+                print(f"Warning: Could not instantiate class {name}: {e}")
+                continue
+
+    print(f"Loaded {len(registry._tools)} tools from module {module_name}")
+
+
 # =============================================================================
 # Common LLM Processing and Opik Utilities
 # =============================================================================
 
 
-def configure_opik(opik_mode: str = "hosted", project_name: str = "ez-mcp-toolbox"):
+def configure_opik(
+    opik_mode: str = "hosted", project_name: str = "ez-mcp-toolbox"
+) -> None:
     """
     Configure Opik based on the specified mode.
 
@@ -357,8 +436,8 @@ def call_llm_with_tracing(
     tools: Optional[List[Dict[str, Any]]] = None,
     debug: bool = False,
     console: Optional[Console] = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> Any:
     """
     Call LLM with proper Opik span management.
 
@@ -444,7 +523,9 @@ def call_llm_with_tracing(
         raise
 
 
-def extract_llm_content(resp, debug: bool = False, console: Optional[Console] = None):
+def extract_llm_content(
+    resp: Any, debug: bool = False, console: Optional[Console] = None
+) -> tuple[Optional[str], Optional[Any]]:
     """
     Extract content from LLM response, handling both text and tool call responses.
 
