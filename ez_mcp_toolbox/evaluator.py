@@ -10,6 +10,8 @@ import argparse
 import asyncio
 import json
 import sys
+import importlib.util
+import os
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
@@ -37,7 +39,8 @@ class EvaluationConfig:
     prompt: str
     dataset: str
     metric: str
-    experiment_name: str
+    metric_file: Optional[str] = None
+    experiment_name: str = "ez-mcp-evaluation"
     opik_mode: str = "hosted"
     debug: bool = False
     input_field: str = "input"
@@ -262,24 +265,61 @@ class MCPEvaluator:
         metric_names = [name.strip() for name in self.config.metric.split(",")]
         metric_instances = []
 
+        # Determine the metrics module to use
+        if self.config.metric_file:
+            metrics_module = self._load_metrics_from_file(self.config.metric_file)
+        else:
+            metrics_module = metrics
+
         for metric_name in metric_names:
             metric_name = metric_name.strip()
 
-            # Try to get the metric class from opik.evaluation.metrics
+            # Try to get the metric class from the metrics module
             try:
-                metric_class = getattr(metrics, metric_name)
+                metric_class = getattr(metrics_module, metric_name)
                 metric_instances.append(metric_class())
                 self.console.print(f"✅ Loaded metric: {metric_name}")
             except AttributeError:
                 self.console.print(
                     f"❌ Unknown metric '{metric_name}'. Available metrics:"
                 )
-                available_metrics = list_available_metrics()
+                available_metrics = self._list_available_metrics_from_module(
+                    metrics_module
+                )
                 for available_metric in available_metrics:
                     self.console.print(f"   - {available_metric}")
                 raise ValueError(f"Unknown metric: {metric_name}")
 
         return metric_instances
+
+    def _load_metrics_from_file(self, file_path: str) -> Any:
+        """Load metrics from a Python file."""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Metric file not found: {file_path}")
+
+        try:
+            # Load the module from file
+            spec = importlib.util.spec_from_file_location("metric_module", file_path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Could not load module from {file_path}")
+
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            self.console.print(f"✅ Loaded metrics from file: {file_path}")
+            return module
+        except Exception as e:
+            self.console.print(f"❌ Error loading metrics from file {file_path}: {e}")
+            raise
+
+    def _list_available_metrics_from_module(self, metrics_module: Any) -> List[str]:
+        """List all available metrics from a metrics module."""
+        available_metrics = [
+            name
+            for name in dir(metrics_module)
+            if not name.startswith("_") and callable(getattr(metrics_module, name))
+        ]
+        return sorted(available_metrics)
 
     async def run_evaluation(self) -> Any:
         """Run the evaluation using Opik."""
@@ -420,6 +460,7 @@ Examples:
   ez-mcp-eval --prompt "Translate to French" --dataset "translation-dataset" --metric "Hallucination,LevenshteinRatio" --opik local
   ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --input "question" --output "reference=answer"
   ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model-kwargs '{"temperature": 0.7, "max_tokens": 1000}'
+  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metric-file "my_metrics.py"
         """,
     )
 
@@ -435,6 +476,11 @@ Examples:
         "--metric",
         required=True,
         help="Name of the metric(s) to use for evaluation. Use comma-separated list for multiple metrics (e.g., 'Hallucination,LevenshteinRatio')",
+    )
+
+    parser.add_argument(
+        "--metric-file",
+        help="Path to a Python file containing metric definitions. If provided, metrics will be loaded from this file instead of opik.evaluation.metrics",
     )
 
     parser.add_argument(
@@ -483,7 +529,7 @@ Examples:
     )
 
     parser.add_argument(
-        "--mcp-config",
+        "--config",
         type=str,
         help="Path to MCP server configuration file (default: ez-config.json)",
     )
@@ -555,6 +601,7 @@ def main() -> None:
         prompt=args.prompt,
         dataset=args.dataset,
         metric=args.metric,
+        metric_file=args.metric_file,
         experiment_name=args.experiment_name,
         opik_mode=args.opik,
         debug=args.debug,
@@ -564,7 +611,7 @@ def main() -> None:
         output_ref=output_ref,  # The metric's expected field name (e.g., "reference")
         model=args.model,
         model_kwargs=model_kwargs,
-        config_path=args.mcp_config,
+        config_path=args.config,
     )
 
     # Create and run evaluator

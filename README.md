@@ -354,7 +354,7 @@ ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hall
 ez-mcp-eval [-h] --prompt PROMPT --dataset DATASET --metric METRIC 
             [--experiment-name EXPERIMENT_NAME] [--opik {local,hosted,disabled}] 
             [--debug] [--input INPUT] [--output OUTPUT] [--list-metrics] 
-            [--model MODEL] [--model-kwargs MODEL_KWARGS]
+            [--model MODEL] [--model-kwargs MODEL_KWARGS] [--metric-file METRIC_FILE]
 ```
 
 #### Required Arguments
@@ -373,6 +373,7 @@ ez-mcp-eval [-h] --prompt PROMPT --dataset DATASET --metric METRIC
 - `--list-metrics` - List all available metrics and exit
 - `--model MODEL` - LLM model to use for evaluation (default: gpt-3.5-turbo)
 - `--model-kwargs MODEL_KWARGS` - JSON string of additional keyword arguments for the LLM model
+- `--metric-file METRIC_FILE` - Path to a Python file containing metric definitions (alternative to using opik.evaluation.metrics)
 
 ### Dataset Loading
 
@@ -421,6 +422,12 @@ ez-mcp-eval --prompt "Answer the question" --dataset "my_optimizer_dataset" --me
 ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --input "question" --output "reference=answer"
 ```
 
+#### Using Custom Metrics from File
+```bash
+# Use custom metrics defined in a Python file
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metric-file "my_metrics.py"
+```
+
 #### List Available Metrics
 ```bash
 # See all available metrics
@@ -431,6 +438,28 @@ ez-mcp-eval --list-metrics
 ```bash
 # Enable debug output for troubleshooting
 ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination" --debug
+```
+
+### Custom Metrics
+
+You can define custom metrics in a Python file and use them with the `--metric-file` option. The metric file should contain metric classes that follow the same interface as Opik's built-in metrics.
+
+#### Example Custom Metric File (`my_metrics.py`)
+
+```python
+class CustomMetric:
+    def __init__(self):
+        self.name = "CustomMetric"
+    
+    def __call__(self, output, reference):
+        # Your custom evaluation logic here
+        # Return a score between 0 and 1
+        return 0.8  # Example score
+```
+
+Then use it with:
+```bash
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metric-file "my_metrics.py"
 ```
 
 ### Opik Integration
