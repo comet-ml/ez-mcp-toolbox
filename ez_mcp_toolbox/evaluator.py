@@ -289,28 +289,61 @@ class MCPEvaluator:
 
         # Determine the metrics module to use
         if self.config.metrics_file:
-            metrics_module = self._load_metrics_from_file(self.config.metrics_file)
+            custom_metrics_module = self._load_metrics_from_file(
+                self.config.metrics_file
+            )
         else:
-            metrics_module = metrics
+            custom_metrics_module = None
 
         for metric_name in metric_names:
             metric_name = metric_name.strip()
+            metric_class = None
+            source_module = None
 
-            # Try to get the metric class from the metrics module
-            try:
-                metric_class = getattr(metrics_module, metric_name)
-                metric_instances.append(metric_class())
-                self.console.print(f"✅ Loaded metric: {metric_name}")
-            except AttributeError:
+            # First try to get the metric from custom metrics file if provided
+            if custom_metrics_module:
+                try:
+                    metric_class = getattr(custom_metrics_module, metric_name)
+                    source_module = "custom metrics file"
+                except AttributeError:
+                    pass
+
+            # If not found in custom metrics, try opik.evaluation.metrics as fallback
+            if metric_class is None:
+                try:
+                    metric_class = getattr(metrics, metric_name)
+                    source_module = "opik.evaluation.metrics"
+                except AttributeError:
+                    pass
+
+            # If still not found, show error with available metrics
+            if metric_class is None:
                 self.console.print(
                     f"❌ Unknown metric '{metric_name}'. Available metrics:"
                 )
-                available_metrics = self._list_available_metrics_from_module(
-                    metrics_module
+
+                # Show available metrics from both sources
+                if custom_metrics_module:
+                    available_custom_metrics = self._list_available_metrics_from_module(
+                        custom_metrics_module
+                    )
+                    self.console.print("   From custom metrics file:")
+                    for available_metric in available_custom_metrics:
+                        self.console.print(f"     - {available_metric}")
+
+                available_opik_metrics = self._list_available_metrics_from_module(
+                    metrics
                 )
-                for available_metric in available_metrics:
-                    self.console.print(f"   - {available_metric}")
+                self.console.print("   From opik.evaluation.metrics:")
+                for available_metric in available_opik_metrics:
+                    self.console.print(f"     - {available_metric}")
+
                 raise ValueError(f"Unknown metric: {metric_name}")
+
+            metric_instances.append(metric_class())
+            self.console.print(
+                f"✅ Loaded metric: {metric_name} (from {source_module})"
+            )
 
         return metric_instances
 

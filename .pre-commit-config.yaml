@@ -3,24 +3,24 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        files: ^ez_mcp_toolbox
+        files: ^(ez_mcp_toolbox|tests)
       - id: end-of-file-fixer
-        files: ^ez_mcp_toolbox
+        files: ^(ez_mcp_toolbox|tests)
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.4.9
     hooks:
       - id: ruff
         args: [--fix, --show-fixes]
-        files: ^ez_mcp_toolbox
+        files: ^(ez_mcp_toolbox|tests)
       - id: ruff-format
-        files: ^ez_mcp_toolbox
+        files: ^(ez_mcp_toolbox|tests)
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.10.0
     hooks:
       - id: mypy
-        files: ^ez_mcp_toolbox
+        files: ^(ez_mcp_toolbox|tests)
         # `exclude` option will work only from here.
         # The rest of mypy configuration can be moved to pyproject.toml
         args:
