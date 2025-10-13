@@ -36,6 +36,12 @@ ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hall
 
 This will evaluate your LLM application using Opik's evaluation framework with your dataset and chosen metrics.
 
+You can also limit the evaluation to the first N items of the dataset:
+
+```bash
+ez-mcp-eval --prompt "Answer the question" --dataset "large-dataset" --metric "Hallucination" --num 100
+```
+
 ### Customize the chatbot
 
 You can customize the chatbot's behavior with a custom system prompt:
@@ -320,6 +326,9 @@ ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"
 
 # Combine options
 ez-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --debug
+
+# Use custom tools file
+ez-mcp-chatbot --tools-file "my_tools.py"
 ```
 
 #### Available Options
@@ -328,6 +337,7 @@ ez-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --d
 - `--system-prompt TEXT` - Custom system prompt for the chatbot (overrides default)
 - `--debug` - Enable debug output during processing
 - `--init` - Create a default ez-config.json file and exit
+- `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.
 - `config_path` - Path to the configuration file (default: ez-config.json)
 
 ## ez-mcp-eval
@@ -353,8 +363,9 @@ ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hall
 ```
 ez-mcp-eval [-h] --prompt PROMPT --dataset DATASET --metric METRIC 
             [--experiment-name EXPERIMENT_NAME] [--opik {local,hosted,disabled}] 
-            [--debug] [--input INPUT] [--output OUTPUT] [--list-metrics] 
-            [--model MODEL] [--model-kwargs MODEL_KWARGS] [--metric-file METRIC_FILE]
+            [--debug] [--input INPUT] [--output OUTPUT] [--num NUM] [--list-metrics] 
+            [--model MODEL] [--model-kwargs MODEL_KWARGS] [--metrics-file METRICS_FILE]
+            [--config CONFIG] [--tools-file TOOLS_FILE]
 ```
 
 #### Required Arguments
@@ -370,10 +381,13 @@ ez-mcp-eval [-h] --prompt PROMPT --dataset DATASET --metric METRIC
 - `--debug` - Enable debug output during processing
 - `--input INPUT` - Input field name in the dataset (default: input)
 - `--output OUTPUT` - Output field mapping in format reference=DATASET_FIELD (default: reference=answer)
+- `--num NUM` - Number of items to evaluate from the dataset (takes first N items, default: all items)
 - `--list-metrics` - List all available metrics and exit
 - `--model MODEL` - LLM model to use for evaluation (default: gpt-3.5-turbo)
 - `--model-kwargs MODEL_KWARGS` - JSON string of additional keyword arguments for the LLM model
-- `--metric-file METRIC_FILE` - Path to a Python file containing metric definitions (alternative to using opik.evaluation.metrics)
+- `--metrics-file METRICS_FILE` - Path to a Python file containing metric definitions (alternative to using opik.evaluation.metrics)
+- `--config CONFIG` - Path to MCP server configuration file (default: ez-config.json)
+- `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.
 
 ### Dataset Loading
 
@@ -422,10 +436,50 @@ ez-mcp-eval --prompt "Answer the question" --dataset "my_optimizer_dataset" --me
 ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --input "question" --output "reference=answer"
 ```
 
+### Field Validation
+
+The `ez-mcp-eval` command now includes automatic validation of input and output field mappings to prevent common configuration errors:
+
+#### Input Field Validation
+- **What it checks**: The `--input` field must exist in the dataset items
+- **When it runs**: Before starting the evaluation
+- **Error handling**: If the field doesn't exist, the command stops with a clear error message showing available fields
+
+#### Output Field Validation
+- **What it checks**: 
+  - The `--output` VALUE (dataset field) must exist in the dataset items
+  - The `--output` KEY (metric parameter) must be a valid parameter for the selected metric(s) score method
+- **When it runs**: Before starting the evaluation
+- **Error handling**: If validation fails, the command stops with clear error messages
+
+#### Example Validation Errors
+
+```bash
+# Input field not found in dataset
+❌ Input field 'question' not found in dataset items
+   Available fields: input, answer
+
+# Output field not found in dataset  
+❌ Reference field 'response' not found in dataset items
+   Available fields: input, answer
+
+# Invalid metric parameter
+❌ Output reference 'reference' is not a valid parameter for metric 'LevenshteinRatio' score method
+   Available parameters: output, reference
+```
+
+This validation helps catch configuration errors early, saving time and preventing failed evaluations.
+
 #### Using Custom Metrics from File
 ```bash
 # Use custom metrics defined in a Python file
-ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metric-file "my_metrics.py"
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metrics-file "my_metrics.py"
+```
+
+#### Using Custom Tools File
+```bash
+# Use a custom tools file for MCP server configuration
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --tools-file "my_tools.py"
 ```
 
 #### List Available Metrics
@@ -442,7 +496,7 @@ ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "Hall
 
 ### Custom Metrics
 
-You can define custom metrics in a Python file and use them with the `--metric-file` option. The metric file should contain metric classes that follow the same interface as Opik's built-in metrics.
+You can define custom metrics in a Python file and use them with the `--metrics-file` option. The metric file should contain metric classes that follow the same interface as Opik's built-in metrics.
 
 #### Example Custom Metric File (`my_metrics.py`)
 
@@ -459,7 +513,7 @@ class CustomMetric:
 
 Then use it with:
 ```bash
-ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metric-file "my_metrics.py"
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metrics-file "my_metrics.py"
 ```
 
 ### Opik Integration

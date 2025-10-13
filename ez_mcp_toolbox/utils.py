@@ -8,11 +8,23 @@ import json
 import importlib.util
 import sys
 import os
+import warnings
 from typing import Any, Dict, List, Callable, Optional, Union
+
 from mcp import Tool
 from rich.console import Console
 from opik import track
 import opik
+
+# Suppress litellm RuntimeWarning about coroutines never awaited
+warnings.filterwarnings(
+    "ignore",
+    category=RuntimeWarning,
+    message="coroutine 'close_litellm_async_clients' was never awaited",
+)
+warnings.filterwarnings(
+    "ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*"
+)
 
 
 class ToolRegistry:
@@ -208,7 +220,9 @@ class ToolRegistry:
                 return [{"type": "text", "text": result}]
             elif isinstance(result, (dict, list)):
                 # For structured data, return as JSON
-                return [{"type": "text", "text": json.dumps(result, indent=2)}]
+                return [
+                    {"type": "text", "text": json.dumps(result, separators=(",", ":"))}
+                ]
             else:
                 return [{"type": "text", "text": str(result)}]
 
@@ -648,3 +662,36 @@ def format_assistant_tool_calls(tool_calls: List[Dict[str, Any]]) -> Dict[str, A
         Formatted assistant message with tool calls
     """
     return {"role": "assistant", "tool_calls": tool_calls, "content": ""}
+
+
+def run_async_in_sync_context(async_func, *args, **kwargs):
+    """
+    Run an async function in a synchronous context using nest_asyncio.
+
+    This utility function handles the common pattern of running async code
+    from within a synchronous context, which is needed for tool execution
+    in evaluation tasks.
+
+    Args:
+        async_func: The async function to run
+        *args: Positional arguments for the async function
+        **kwargs: Keyword arguments for the async function
+
+    Returns:
+        The result of the async function
+
+    Raises:
+        Exception: Any exception raised by the async function
+    """
+    import asyncio
+    import nest_asyncio
+
+    # Apply nest_asyncio to allow nested event loops
+    nest_asyncio.apply()
+
+    # Create the async function call
+    async def _call_async():
+        return await async_func(*args, **kwargs)
+
+    # Run the async function
+    return asyncio.run(_call_async())

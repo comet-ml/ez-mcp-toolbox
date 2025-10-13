@@ -6,12 +6,18 @@ import uuid
 import argparse
 import io
 import traceback
+import warnings
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 from opik import track, opik_context
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+
 from .utils import (
     configure_opik as configure_opik_util,
     call_llm_with_tracing,
@@ -21,11 +27,15 @@ from .utils import (
 )
 from .mcp_utils import MCPManager
 
-# Prompt toolkit imports for enhanced input handling
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+# Suppress litellm RuntimeWarning about coroutines never awaited
+warnings.filterwarnings(
+    "ignore",
+    category=RuntimeWarning,
+    message="coroutine 'close_litellm_async_clients' was never awaited",
+)
+warnings.filterwarnings(
+    "ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*"
+)
 
 load_dotenv()
 
@@ -234,9 +244,11 @@ class MCPChatbot:
         max_rounds: Optional[int] = 4,
         debug: bool = False,
         model_override: Optional[str] = None,
+        tools_file: Optional[str] = None,
     ) -> None:
         self.system_prompt = system_prompt
         self.config_path = config_path
+        self.tools_file = tools_file
         self.servers, self.model, self.model_kwargs = self.load_config(config_path)
 
         # Override model if provided
@@ -326,9 +338,26 @@ class MCPChatbot:
     async def connect_all_servers(self):
         """Connect to all configured MCP servers via subprocess."""
         # Load MCP configuration and connect
-        servers = self.mcp_manager.load_mcp_config(self.config_path)
-        if servers:
+        if self.tools_file:
+            # Create dynamic MCP server configuration using tools file
+            from .mcp_utils import ServerConfig
+
+            servers = [
+                ServerConfig(
+                    name="ez-mcp-server",
+                    description="Ez MCP server for tool discovery and execution",
+                    command="ez-mcp-server",
+                    args=[self.tools_file],
+                )
+            ]
+            self.console.print(
+                f"📡 Created MCP server configuration with tools file: {self.tools_file}"
+            )
             await self.mcp_manager.connect_all_servers(servers)
+        else:
+            servers = self.mcp_manager.load_mcp_config(self.config_path)
+            if servers:
+                await self.mcp_manager.connect_all_servers(servers)
 
     def _execute_python_code(self, code: str) -> str:
         """Execute Python code with persistent environment."""
@@ -492,7 +521,19 @@ class MCPChatbot:
                                     if content_data[0].get("type") == "text":
                                         return content_data[0]["text"]
                                     else:
-                                        return str(content_data)
+                                        # Extract text content from list of content items
+                                        text_parts = []
+                                        for item in content_data:
+                                            if hasattr(item, "text"):
+                                                text_parts.append(item.text)
+                                            elif (
+                                                isinstance(item, dict)
+                                                and "text" in item
+                                            ):
+                                                text_parts.append(item["text"])
+                                            else:
+                                                text_parts.append(str(item))
+                                        return "".join(text_parts)
                                 else:
                                     return str(content_data)
                             except Exception:
@@ -502,12 +543,11 @@ class MCPChatbot:
                     except Exception as e:
                         return f"Error calling tool '{tool_name}': {e}"
 
-                # Run the async function - use nest_asyncio to handle nested event loops
+                # Run the async function using common utility
                 try:
-                    import nest_asyncio
+                    from .utils import run_async_in_sync_context
 
-                    nest_asyncio.apply()
-                    result = asyncio.run(_call_tool())
+                    result = run_async_in_sync_context(_call_tool)
                     if self.debug:
                         print(result)
                     return None
@@ -577,7 +617,19 @@ class MCPChatbot:
                                     if content_data[0].get("type") == "text":
                                         return content_data[0]["text"]
                                     else:
-                                        return str(content_data)
+                                        # Extract text content from list of content items
+                                        text_parts = []
+                                        for item in content_data:
+                                            if hasattr(item, "text"):
+                                                text_parts.append(item.text)
+                                            elif (
+                                                isinstance(item, dict)
+                                                and "text" in item
+                                            ):
+                                                text_parts.append(item["text"])
+                                            else:
+                                                text_parts.append(str(item))
+                                        return "".join(text_parts)
                                 else:
                                     return str(content_data)
                             except Exception:
@@ -1401,7 +1453,16 @@ class MCPChatbot:
                             if content_data[0].get("type") == "text":
                                 content_str = content_data[0]["text"]
                             else:
-                                content_str = str(content_data)
+                                # Extract text content from list of content items
+                                text_parts = []
+                                for item in content_data:
+                                    if hasattr(item, "text"):
+                                        text_parts.append(item.text)
+                                    elif isinstance(item, dict) and "text" in item:
+                                        text_parts.append(item["text"])
+                                    else:
+                                        text_parts.append(str(item))
+                                content_str = "".join(text_parts)
                         else:
                             content_str = str(content_data)
                     except Exception:
@@ -1522,6 +1583,7 @@ Examples:
   ez-mcp-chatbot --init             # Create default ez-config.json
   ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"  # Custom system prompt
   ez-mcp-chatbot --model "openai/gpt-4"  # Override model from config
+  ez-mcp-chatbot --tools-file "my_tools.py"  # Use custom tools file
         """,
     )
 
@@ -1561,6 +1623,12 @@ Examples:
         help="Override the model specified in the config file",
     )
 
+    parser.add_argument(
+        "--tools-file",
+        type=str,
+        help="Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.",
+    )
+
     return parser.parse_args()
 
 
@@ -1586,6 +1654,7 @@ with any of the available tools.
         system_prompt=system_prompt,
         debug=args.debug,
         model_override=args.model,
+        tools_file=args.tools_file,
     )
     await bot.run()
 

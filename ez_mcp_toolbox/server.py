@@ -67,8 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "tools_file",
         nargs="?",
-        default="tools.py",
-        help="Path to tools file or module name (e.g., 'my_tools.py' or 'opik_optimizer.utils.core') (default: tools.py)",
+        default="DEMO",
+        help="Path to tools file, module name, or 'none' to disable tools (e.g., 'my_tools.py', 'opik_optimizer.utils.core', or 'none') (default: DEMO)",
     )
     parser.add_argument(
         "--transport",
@@ -221,7 +221,10 @@ async def main() -> None:
 
     # Load tools from the specified source or use default tools
     try:
-        if args.tools_file == "tools.py" and not os.path.exists(args.tools_file):
+        if args.tools_file == "none":
+            # Skip loading any tools
+            print("✓ No tools loaded (tools_file set to 'none')")
+        elif args.tools_file == "DEMO" and not os.path.exists(args.tools_file):
             # No tools file provided and default doesn't exist, load example tools
             load_default_tools()
             print("✓ Loaded default example tools from README")

@@ -235,10 +235,19 @@ class MCPManager:
                                     return f"Image result from {actual_tool_name} (base64 data)"
                             except (json.JSONDecodeError, AttributeError):
                                 pass
-                        # If not an image, convert to string
+
+                        # Extract text content from list of content items
                         if self.debug:
-                            print("📝 Converting content to string")
-                        content_str = str(content_data)
+                            print("📝 Converting content list to string")
+                        text_parts = []
+                        for item in content_data:
+                            if hasattr(item, "text"):
+                                text_parts.append(item.text)
+                            elif isinstance(item, dict) and "text" in item:
+                                text_parts.append(item["text"])
+                            else:
+                                text_parts.append(str(item))
+                        content_str = "".join(text_parts)
                     elif (
                         isinstance(content_data, dict)
                         and content_data.get("type") == "image_result"
