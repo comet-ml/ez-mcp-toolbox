@@ -296,6 +296,13 @@ def load_tools_from_file(file_path: str) -> None:
     sys.modules["tools_module"] = module
     spec.loader.exec_module(module)
 
+    # Check for and call _initialize function if it exists
+    if hasattr(module, "_initialize") and callable(module._initialize):
+        try:
+            module._initialize()
+        except Exception as e:
+            print(f"Warning: Error calling _initialize function: {e}")
+
     # Skip utility functions and classes
     skip_functions = {"TypedDict"}
 
@@ -372,6 +379,13 @@ def load_tools_from_module(module_name: str) -> None:
         module = importlib.import_module(module_name)
     except ImportError as e:
         raise ImportError(f"Could not import module '{module_name}': {e}")
+
+    # Check for and call _initialize function if it exists
+    if hasattr(module, "_initialize") and callable(module._initialize):
+        try:
+            module._initialize()
+        except Exception as e:
+            print(f"Warning: Error calling _initialize function: {e}")
 
     # Skip utility functions and classes
     skip_functions = {"TypedDict"}
