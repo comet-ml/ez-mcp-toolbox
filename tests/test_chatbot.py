@@ -5,10 +5,7 @@ These tests require a properly configured comet_ml.API() that can access real da
 """
 
 import pytest
-import asyncio
 from unittest.mock import patch, Mock
-from datetime import datetime
-from typing import List, Dict, Any
 from io import StringIO
 
 # Import the chatbot from the ez-mcp package
@@ -27,17 +24,6 @@ class TestChatbot:
     @pytest.mark.asyncio
     async def test_chatbot_initialization(self):
         """Test chatbot can be initialized properly."""
-        # Create a minimal config for testing
-        config = {
-            "servers": [
-                {
-                    "name": "comet-mcp",
-                    "description": "Comet ML MCP server for experiment management",
-                    "command": "comet-mcp",
-                }
-            ]
-        }
-
         # Mock the config loading
         with patch("ez_mcp_toolbox.chatbot.MCPChatbot.load_config") as mock_load_config:
             mock_server = Mock(
@@ -47,12 +33,18 @@ class TestChatbot:
                 args=[],
                 env=None,
             )
-            mock_load_config.return_value = ([mock_server], "openai/gpt-4o-mini", {"temperature": 0.2})
+            mock_load_config.return_value = (
+                [mock_server],
+                "openai/gpt-4o-mini",
+                {"temperature": 0.2},
+            )
 
             # Mock the server connection
             with patch("ez_mcp_toolbox.chatbot.MCPChatbot.connect_all_servers"):
                 # Mock the LLM completion to avoid real API calls
-                with patch("ez_mcp_toolbox.utils.call_llm_with_tracing") as mock_completion:
+                with patch(
+                    "ez_mcp_toolbox.utils.call_llm_with_tracing"
+                ) as mock_completion:
                     # Mock the LLM response
                     mock_llm_response = Mock()
                     mock_choice = Mock()
@@ -63,9 +55,9 @@ class TestChatbot:
                     mock_completion.return_value = mock_llm_response
 
                     chatbot = MCPChatbot(
-                        "ez-config.json", 
+                        "ez-config.json",
                         system_prompt="You are a helpful AI assistant.",
-                        max_rounds=2
+                        max_rounds=2,
                     )
 
                     # Mock the session and tools
@@ -95,9 +87,7 @@ class TestChatbot:
                     chatbot.mcp_manager.sessions["comet-mcp"] = mock_session
 
                     # Test the chatbot functionality
-                    response = await chatbot.chat_once(
-                        "What is the current session status?"
-                    )
+                    response = await chatbot.chat("What is the current session status?")
 
                     # Verify response
                     assert isinstance(response, str)
@@ -109,50 +99,56 @@ class TestChatbot:
         """Test that Rich formatting is properly initialized and working."""
         from ez_mcp_toolbox.chatbot import MCPChatbot
         from rich.console import Console
-        
+
         # Create a chatbot instance
-        chatbot = MCPChatbot("ez-config.json", system_prompt="You are a helpful AI assistant.")
-        
+        chatbot = MCPChatbot(
+            "ez-config.json", system_prompt="You are a helpful AI assistant."
+        )
+
         # Verify that Rich console is initialized
-        assert hasattr(chatbot, 'console')
+        assert hasattr(chatbot, "console")
         assert isinstance(chatbot.console, Console)
-        
+
         # Test that console can render markdown
         test_markdown = "# Test Header\n\nThis is **bold** text and *italic* text."
-        
+
         # Capture console output
         console_output = StringIO()
         test_console = Console(file=console_output, force_terminal=True)
         test_console.print(test_markdown)
-        
+
         # Verify output was captured (Rich formatting should work)
         output = console_output.getvalue()
         assert len(output) > 0
-        
+
         print("✓ Rich formatting test passed")
 
     def test_opik_integration(self):
         """Test that Opik logging is properly integrated."""
         from ez_mcp_toolbox.chatbot import MCPChatbot
         import uuid
-        
+
         # Create a chatbot instance
-        chatbot = MCPChatbot("ez-config.json", system_prompt="You are a helpful AI assistant.")
-        
+        chatbot = MCPChatbot(
+            "ez-config.json", system_prompt="You are a helpful AI assistant."
+        )
+
         # Verify that thread_id is generated
-        assert hasattr(chatbot, 'thread_id')
+        assert hasattr(chatbot, "thread_id")
         assert isinstance(chatbot.thread_id, str)
         assert len(chatbot.thread_id) > 0
-        
+
         # Verify that thread_id is a valid UUID
         try:
             uuid.UUID(chatbot.thread_id)
         except ValueError:
             assert False, "thread_id should be a valid UUID"
-        
-        # Verify that chat_once method has the @track decorator
-        assert hasattr(chatbot.chat_once, '__wrapped__'), "chat_once should be decorated with @track"
-        
+
+        # Verify that chat method has the @track decorator
+        assert hasattr(
+            chatbot.chat, "__wrapped__"
+        ), "chat should be decorated with @track"
+
         print("✓ Opik integration test passed")
         print(f"  Thread ID: {chatbot.thread_id}")
 

@@ -329,6 +329,12 @@ ez-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --d
 
 # Use custom tools file
 ez-mcp-chatbot --tools-file "my_tools.py"
+
+# Override model arguments
+ez-mcp-chatbot --model-args '{"temperature": 0.7, "max_tokens": 1000}'
+
+# Override both model and model arguments
+ez-mcp-chatbot --model "openai/gpt-4" --model-args '{"temperature": 0.3, "max_tokens": 2000}'
 ```
 
 #### Available Options
@@ -337,6 +343,8 @@ ez-mcp-chatbot --tools-file "my_tools.py"
 - `--system-prompt TEXT` - Custom system prompt for the chatbot (overrides default)
 - `--debug` - Enable debug output during processing
 - `--init` - Create a default ez-config.json file and exit
+- `--model MODEL` - Override the model specified in the config file
+- `--model-args MODEL_ARGS` - JSON string of additional keyword arguments to pass to the LLM model
 - `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.
 - `config_path` - Path to the configuration file (default: ez-config.json)
 

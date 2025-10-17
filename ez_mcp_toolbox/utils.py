@@ -219,9 +219,14 @@ class ToolRegistry:
             if isinstance(result, str):
                 return [{"type": "text", "text": result}]
             elif isinstance(result, (dict, list)):
-                # For structured data, return as JSON
+                # For structured data, preserve the structure by wrapping in a special format
                 return [
-                    {"type": "text", "text": json.dumps(result, separators=(",", ":"))}
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {"__structured_data__": result}, separators=(",", ":")
+                        ),
+                    }
                 ]
             else:
                 return [{"type": "text", "text": str(result)}]
@@ -651,18 +656,29 @@ def create_llm_messages(
     return messages
 
 
-def format_tool_result(tool_call_id: str, content: str) -> Dict[str, Any]:
+def format_tool_result(tool_call_id: str, content: Any) -> Dict[str, Any]:
     """
     Format tool execution result for LLM consumption.
 
     Args:
         tool_call_id: ID of the tool call
-        content: Result content from tool execution
+        content: Result content from tool execution (can be str, dict, list, or other)
 
     Returns:
         Formatted tool result message
     """
-    return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+    # Handle structured data by converting to JSON string for LLM consumption
+    if isinstance(content, (dict, list)):
+        # For structured data, convert to JSON string so LLM can parse it
+        # The LLM will understand this is structured data and can work with it
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": json.dumps(content, indent=2),
+        }
+    else:
+        # For other types, convert to string
+        return {"role": "tool", "tool_call_id": tool_call_id, "content": str(content)}
 
 
 def format_assistant_tool_calls(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -676,6 +692,163 @@ def format_assistant_tool_calls(tool_calls: List[Dict[str, Any]]) -> Dict[str, A
         Formatted assistant message with tool calls
     """
     return {"role": "assistant", "tool_calls": tool_calls, "content": ""}
+
+
+def process_mcp_tool_result(
+    result: Any, tool_name: str = None, debug: bool = False
+) -> Any:
+    """
+    Process MCP tool result, preserving structured data.
+
+    This function extracts and processes the content from an MCP tool result,
+    preserving structured data (dict/list) while handling text content appropriately.
+
+    Args:
+        result: MCP tool result object
+        tool_name: Name of the tool (for debug logging)
+        debug: Whether to enable debug output
+
+    Returns:
+        Processed result - can be str, dict, list, or other types
+    """
+    # Process MCP result content, preserving structured data
+    if hasattr(result, "content") and result.content is not None:
+        try:
+            content_data = result.content
+            if debug:
+                print(f"🔍 Content data type: {type(content_data)}")
+
+            # Check if this is an ImageResult
+            if isinstance(content_data, list) and len(content_data) > 0:
+                # Check if the first item is text content with image data
+                first_item = content_data[0]
+                if hasattr(first_item, "text"):
+                    try:
+                        # Try to parse the text as JSON
+                        text_data = json.loads(first_item.text)
+                        if (
+                            isinstance(text_data, dict)
+                            and text_data.get("type") == "image_result"
+                            and "image_base64" in text_data
+                        ):
+                            # Handle image result specially
+                            if debug:
+                                print(
+                                    f"🖼️  Detected image result from {tool_name or 'tool'}"
+                                )
+                            return (
+                                f"Image result from {tool_name or 'tool'} (base64 data)"
+                            )
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+
+                # Check if this is structured data (list of content items with structured data)
+                # If all items are text content, extract as string
+                # If any item contains structured data, preserve the structure
+                has_structured_data = False
+                text_parts = []
+                structured_items = []
+
+                for item in content_data:
+                    if hasattr(item, "text"):
+                        try:
+                            # Try to parse as JSON to see if it's structured data
+                            parsed = json.loads(item.text)
+                            if (
+                                isinstance(parsed, dict)
+                                and "__structured_data__" in parsed
+                            ):
+                                # This is our special format for structured data
+                                structured_items.append(parsed["__structured_data__"])
+                                has_structured_data = True
+                            elif isinstance(parsed, (dict, list)):
+                                structured_items.append(parsed)
+                                has_structured_data = True
+                            else:
+                                text_parts.append(item.text)
+                        except (json.JSONDecodeError, ValueError):
+                            # Not JSON, treat as text
+                            text_parts.append(item.text)
+                    elif isinstance(item, dict) and "text" in item:
+                        try:
+                            # Try to parse as JSON to see if it's structured data
+                            parsed = json.loads(item["text"])
+                            if (
+                                isinstance(parsed, dict)
+                                and "__structured_data__" in parsed
+                            ):
+                                # This is our special format for structured data
+                                structured_items.append(parsed["__structured_data__"])
+                                has_structured_data = True
+                            elif isinstance(parsed, (dict, list)):
+                                structured_items.append(parsed)
+                                has_structured_data = True
+                            else:
+                                text_parts.append(item["text"])
+                        except (json.JSONDecodeError, ValueError):
+                            # Not JSON, treat as text
+                            text_parts.append(item["text"])
+                    else:
+                        text_parts.append(str(item))
+
+                if has_structured_data:
+                    if debug:
+                        print("📊 Preserving structured data from content list")
+                    # If we have both text and structured data, combine them
+                    if text_parts:
+                        result_data: Any = {
+                            "text": "".join(text_parts),
+                            "structured_data": structured_items,
+                        }
+                    else:
+                        # If we only have structured data, return the first item or combine them
+                        if len(structured_items) == 1:
+                            result_data = structured_items[0]
+                        else:
+                            result_data = structured_items
+                    return result_data
+                else:
+                    # All text content
+                    if debug:
+                        print("📝 Converting content list to string")
+                    return "".join(text_parts)
+            elif (
+                isinstance(content_data, dict)
+                and content_data.get("type") == "image_result"
+                and "image_base64" in content_data
+            ):
+                # Handle image result specially
+                if debug:
+                    print(f"🖼️  Detected image result from {tool_name or 'tool'}")
+                return f"Image result from {tool_name or 'tool'} (base64 data)"
+            else:
+                # For other content types, preserve structure if it's dict/list
+                if isinstance(content_data, dict):
+                    # Check if this is our special format for structured data
+                    if "__structured_data__" in content_data:
+                        if debug:
+                            print("📊 Extracting structured data from special format")
+                        return content_data["__structured_data__"]
+                    else:
+                        if debug:
+                            print("📊 Preserving structured data")
+                        return content_data
+                elif isinstance(content_data, list):
+                    if debug:
+                        print("📊 Preserving structured data")
+                    return content_data
+                else:
+                    if debug:
+                        print("📝 Converting content to string")
+                    return str(content_data)
+        except Exception as e:
+            if debug:
+                print(f"❌ Error processing content: {e}")
+            return str(result.content)
+    else:
+        if debug:
+            print("📝 Converting result to string")
+        return str(result)
 
 
 def run_async_in_sync_context(async_func, *args, **kwargs):

@@ -157,7 +157,7 @@ class MCPManager:
         return all_tools
 
     @track(name="execute_tool_call", type="tool")
-    async def execute_tool_call(self, tool_call) -> str:
+    async def execute_tool_call(self, tool_call) -> Any:
         """Execute a tool call on the appropriate MCP server."""
         fn_name = tool_call.function.name
         args_raw = tool_call.function.arguments or "{}"
@@ -207,91 +207,10 @@ class MCPManager:
             # Call the MCP tool
             result = await session.call_tool(actual_tool_name, args)
 
-            # Best-effort stringify of MCP result content
-            if hasattr(result, "content") and result.content is not None:
-                try:
-                    content_data = result.content
-                    if self.debug:
-                        print(f"🔍 Content data type: {type(content_data)}")
+            # Process MCP result content using shared utility
+            from .utils import process_mcp_tool_result
 
-                    # Check if this is an ImageResult
-                    if isinstance(content_data, list) and len(content_data) > 0:
-                        # Check if the first item is text content with image data
-                        first_item = content_data[0]
-                        if hasattr(first_item, "text"):
-                            try:
-                                # Try to parse the text as JSON
-                                text_data = json.loads(first_item.text)
-                                if (
-                                    isinstance(text_data, dict)
-                                    and text_data.get("type") == "image_result"
-                                    and "image_base64" in text_data
-                                ):
-                                    # Handle image result specially
-                                    if self.debug:
-                                        print(
-                                            f"🖼️  Detected image result from {actual_tool_name}"
-                                        )
-                                    return f"Image result from {actual_tool_name} (base64 data)"
-                            except (json.JSONDecodeError, AttributeError):
-                                pass
-
-                        # Extract text content from list of content items
-                        if self.debug:
-                            print("📝 Converting content list to string")
-                        text_parts = []
-                        for item in content_data:
-                            if hasattr(item, "text"):
-                                text_parts.append(item.text)
-                            elif isinstance(item, dict) and "text" in item:
-                                text_parts.append(item["text"])
-                            else:
-                                text_parts.append(str(item))
-                        content_str = "".join(text_parts)
-                    elif (
-                        isinstance(content_data, dict)
-                        and content_data.get("type") == "image_result"
-                        and "image_base64" in content_data
-                    ):
-                        # Handle image result specially
-                        if self.debug:
-                            print(f"🖼️  Detected image result from {actual_tool_name}")
-                        return f"Image result from {actual_tool_name} (base64 data)"
-                    else:
-                        if self.debug:
-                            print("📝 Converting content to JSON string")
-                        content_str = json.dumps(content_data, separators=(",", ":"))
-                except Exception as e:
-                    if self.debug:
-                        print(f"❌ Error processing content: {e}")
-                    content_str = str(result.content)
-            else:
-                if self.debug:
-                    print("📝 Converting result to string")
-                content_str = str(result)
-
-            # Log tool call result
-            if self.debug:
-                print(f"✅ Tool {actual_tool_name} completed successfully")
-                print(f"📊 Result length: {len(content_str)} characters")
-
-            # Check for excessively large results
-            max_result_size = 10 * 1024 * 1024  # 10MB limit
-            if len(content_str) > max_result_size:
-                if self.debug:
-                    print(
-                        f"⚠️  Large result detected: {len(content_str):,} characters (limit: {max_result_size:,})"
-                    )
-                return (
-                    f"⚠️ **Large result from {actual_tool_name}**\n\n"
-                    f"📊 **Result Info:**\n"
-                    f"- Size: {len(content_str):,} characters\n"
-                    f"- Tool: {actual_tool_name}\n"
-                    f"- Status: Completed successfully\n\n"
-                    f"*Note: Result too large to display inline. Consider using a different approach or tool.*"
-                )
-
-            return content_str
+            return process_mcp_tool_result(result, actual_tool_name, self.debug)
         except Exception as e:
             if self.debug:
                 print(f"❌ Tool {actual_tool_name} failed: {e}")

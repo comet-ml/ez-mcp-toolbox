@@ -244,6 +244,7 @@ class MCPChatbot:
         max_rounds: Optional[int] = 4,
         debug: bool = False,
         model_override: Optional[str] = None,
+        model_args_override: Optional[Dict[str, Any]] = None,
         tools_file: Optional[str] = None,
     ) -> None:
         self.system_prompt = system_prompt
@@ -254,6 +255,10 @@ class MCPChatbot:
         # Override model if provided
         if model_override:
             self.model = model_override
+
+        # Override model kwargs if provided
+        if model_args_override:
+            self.model_kwargs = model_args_override
         self.max_rounds = max_rounds
         self.debug = debug
         self.console = Console()
@@ -981,7 +986,7 @@ class MCPChatbot:
         )
 
     @track
-    async def chat_once(self, user_text: str) -> str:
+    async def chat(self, user_text: str) -> str:
         if not self.mcp_manager.sessions:
             raise RuntimeError("Not connected to any MCP servers.")
 
@@ -1047,10 +1052,13 @@ class MCPChatbot:
                     f"[bold blue]Executing {tc.function.name}...[/bold blue]",
                     spinner="dots",
                 ):
-                    content_str = await self.mcp_manager.execute_tool_call(tc)
+                    tool_result = await self.mcp_manager.execute_tool_call(tc)
 
                 if self.debug:
-                    print(f"📊 Tool result length: {len(content_str)} characters")
+                    if isinstance(tool_result, str):
+                        print(f"📊 Tool result length: {len(tool_result)} characters")
+                    else:
+                        print(f"📊 Tool result type: {type(tool_result)}")
 
                 # Build messages to feed back to the model
                 assistant_tool_stub.append(
@@ -1063,7 +1071,7 @@ class MCPChatbot:
                         },
                     }
                 )
-                executed_tool_msgs.append(format_tool_result(tc.id, content_str))
+                executed_tool_msgs.append(format_tool_result(tc.id, tool_result))
 
             # Add the assistant tool-call stub + tool results to persistent history
             if self.debug:
@@ -1078,12 +1086,13 @@ class MCPChatbot:
             # Debug: Check the last message content
             if executed_tool_msgs and self.debug:
                 last_tool_result = executed_tool_msgs[-1]
-                print(
-                    f"🔍 Last tool result preview: {str(last_tool_result.get('content', ''))[:200]}..."
-                )
-                print(
-                    f"🔍 Last tool result length: {len(str(last_tool_result.get('content', '')))}"
-                )
+                content = last_tool_result.get("content", "")
+                if isinstance(content, str):
+                    print(f"🔍 Last tool result preview: {content[:200]}...")
+                    print(f"🔍 Last tool result length: {len(content)}")
+                else:
+                    print(f"🔍 Last tool result type: {type(content)}")
+                    print(f"🔍 Last tool result preview: {str(content)[:200]}...")
 
         return text_reply
 
@@ -1211,7 +1220,7 @@ class MCPChatbot:
                     self.console.print()  # Add spacing
                     continue
 
-                a = await self.chat_once(q)
+                a = await self.chat(q)
 
                 # Display bot response with Rich markdown formatting
                 if a:
@@ -1445,36 +1454,27 @@ class MCPChatbot:
 
                 result = await session.call_tool(tool_name, kwargs)
 
-                # Convert MCP result to readable string
-                if hasattr(result, "content") and result.content is not None:
-                    try:
-                        content_data = result.content
-                        if isinstance(content_data, list) and len(content_data) > 0:
-                            if content_data[0].get("type") == "text":
-                                content_str = content_data[0]["text"]
-                            else:
-                                # Extract text content from list of content items
-                                text_parts = []
-                                for item in content_data:
-                                    if hasattr(item, "text"):
-                                        text_parts.append(item.text)
-                                    elif isinstance(item, dict) and "text" in item:
-                                        text_parts.append(item["text"])
-                                    else:
-                                        text_parts.append(str(item))
-                                content_str = "".join(text_parts)
-                        else:
-                            content_str = str(content_data)
-                    except Exception:
-                        content_str = str(result.content)
-                else:
-                    content_str = str(result)
+                # Process result using shared utility function
+                from .utils import process_mcp_tool_result
+
+                processed_result = process_mcp_tool_result(
+                    result, tool_name, self.debug
+                )
 
                 self.console.print(
                     f"[green]✅ Tool {tool_name} completed successfully[/green]"
                 )
                 self.console.print("[green]📊 Result:[/green]")
-                self.console.print(content_str)
+
+                # Display the result appropriately based on its type
+                if isinstance(processed_result, (dict, list)):
+                    # For structured data, pretty print as JSON
+                    import json
+
+                    self.console.print(json.dumps(processed_result, indent=2))
+                else:
+                    # For strings and other types, display as-is
+                    self.console.print(str(processed_result))
 
             except Exception as e:
                 self.console.print(f"[red]❌ Tool {tool_name} failed: {e}[/red]")
@@ -1583,6 +1583,7 @@ Examples:
   ez-mcp-chatbot --init             # Create default ez-config.json
   ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"  # Custom system prompt
   ez-mcp-chatbot --model "openai/gpt-4"  # Override model from config
+  ez-mcp-chatbot --model-args '{"temperature": 0.7, "max_tokens": 1000}'  # Override model args
   ez-mcp-chatbot --tools-file "my_tools.py"  # Use custom tools file
         """,
     )
@@ -1629,6 +1630,12 @@ Examples:
         help="Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.",
     )
 
+    parser.add_argument(
+        "--model-args",
+        type=str,
+        help='JSON string of additional keyword arguments to pass to the LLM model (e.g., \'{"temperature": 0.7, "max_tokens": 1000}\')',
+    )
+
     return parser.parse_args()
 
 
@@ -1638,6 +1645,16 @@ async def main():
 
     # Configure Opik based on command-line argument
     configure_opik(args.opik)
+
+    # Parse model args JSON
+    model_args_override = None
+    if args.model_args:
+        try:
+            model_args_override = json.loads(args.model_args)
+        except json.JSONDecodeError as e:
+            console = Console()
+            console.print(f"❌ Invalid JSON in --model-args: {e}")
+            sys.exit(1)
 
     # Use provided system prompt or default
     system_prompt = (
@@ -1654,6 +1671,7 @@ with any of the available tools.
         system_prompt=system_prompt,
         debug=args.debug,
         model_override=args.model,
+        model_args_override=model_args_override,
         tools_file=args.tools_file,
     )
     await bot.run()
