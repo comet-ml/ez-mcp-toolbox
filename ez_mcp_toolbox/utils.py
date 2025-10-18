@@ -9,6 +9,10 @@ import importlib.util
 import sys
 import os
 import warnings
+import tempfile
+import urllib.request
+import urllib.parse
+import atexit
 from typing import Any, Dict, List, Callable, Optional, Union
 
 from mcp import Tool
@@ -882,3 +886,105 @@ def run_async_in_sync_context(async_func, *args, **kwargs):
 
     # Run the async function
     return asyncio.run(_call_async())
+
+
+# Global set to track temporary files for cleanup
+_temp_files: set = set()
+
+
+def _cleanup_temp_files():
+    """Clean up all temporary files created during URL downloads."""
+    for temp_path in _temp_files.copy():
+        try:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+        except Exception:
+            pass  # Ignore cleanup errors
+    _temp_files.clear()
+
+
+# Register cleanup function to run at exit
+atexit.register(_cleanup_temp_files)
+
+
+def download_file_from_url(url: str, console: Optional[Console] = None) -> str:
+    """
+    Download a file from a URL and save it to a temporary file.
+
+    Args:
+        url: URL to download the file from
+        console: Optional Rich console for output
+
+    Returns:
+        Path to the temporary file containing the downloaded content
+
+    Raises:
+        ValueError: If the URL is invalid or download fails
+    """
+    try:
+        # Parse the URL to validate it
+        parsed_url = urllib.parse.urlparse(url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            raise ValueError(f"Invalid URL: {url}")
+
+        if console:
+            console.print(f"🌐 Downloading file from URL: {url}")
+        else:
+            print(f"🌐 Downloading file from URL: {url}")
+
+        # Create a temporary file
+        temp_file = tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False)
+        temp_path = temp_file.name
+        temp_file.close()
+
+        # Track the temporary file for cleanup
+        _temp_files.add(temp_path)
+
+        # Download the file content
+        with urllib.request.urlopen(url) as response:
+            content = response.read().decode("utf-8")
+
+        # Write content to temporary file
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        if console:
+            console.print(f"✅ Downloaded file to temporary location: {temp_path}")
+        else:
+            print(f"✅ Downloaded file to temporary location: {temp_path}")
+
+        return temp_path
+
+    except urllib.error.URLError as e:
+        error_msg = f"Failed to download file from URL {url}: {e}"
+        if console:
+            console.print(f"❌ {error_msg}")
+        else:
+            print(f"❌ {error_msg}")
+        raise ValueError(error_msg)
+    except Exception as e:
+        error_msg = f"Error downloading file from URL {url}: {e}"
+        if console:
+            console.print(f"❌ {error_msg}")
+        else:
+            print(f"❌ {error_msg}")
+        raise ValueError(error_msg)
+
+
+def resolve_tools_file_path(tools_file: str, console: Optional[Console] = None) -> str:
+    """
+    Resolve a tools file path, downloading from URL if necessary.
+
+    Args:
+        tools_file: File path or URL to the tools file
+        console: Optional Rich console for output
+
+    Returns:
+        Resolved file path (local file path or temporary file path for URLs)
+    """
+    # Check if it's a URL
+    if tools_file.startswith(("http://", "https://")):
+        return download_file_from_url(tools_file, console)
+    else:
+        # It's a local file path
+        return tools_file

@@ -255,9 +255,11 @@ class MCPEvaluator:
                             messages=messages,
                             debug=self.config.debug,
                             console=self.console,
-                            **self.config.model_kwargs
-                            if self.config.model_kwargs
-                            else {},
+                            **(
+                                self.config.model_kwargs
+                                if self.config.model_kwargs
+                                else {}
+                            ),
                         )
                         final_content, _ = extract_llm_content(
                             final_resp, self.config.debug
@@ -478,17 +480,24 @@ class MCPEvaluator:
 
             # Load MCP configuration if provided
             if self.config.tools_file:
+                # Resolve tools file path (download from URL if necessary)
+                from .utils import resolve_tools_file_path
+
+                resolved_tools_file = resolve_tools_file_path(
+                    self.config.tools_file, self.console
+                )
+
                 # Create dynamic MCP server configuration using tools file
                 servers = [
                     ServerConfig(
                         name="ez-mcp-server",
                         description="Ez MCP server for tool discovery and execution",
                         command="ez-mcp-server",
-                        args=[self.config.tools_file],
+                        args=[resolved_tools_file],
                     )
                 ]
                 self.console.print(
-                    f"📡 Created MCP server configuration with tools file: {self.config.tools_file}"
+                    f"📡 Created MCP server configuration with tools file: {resolved_tools_file}"
                 )
                 await self.mcp_manager.connect_all_servers(servers)
             elif self.config.config_path:
@@ -715,7 +724,7 @@ Examples:
     parser.add_argument(
         "--tools-file",
         type=str,
-        help="Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.",
+        help="Path to a Python file containing tool definitions, or URL to download the file from. If provided, will create an MCP server configuration using this file.",
     )
 
     parser.add_argument(

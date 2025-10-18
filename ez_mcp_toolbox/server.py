@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
         "tools_file",
         nargs="?",
         default="DEMO",
-        help="Path to tools file, module name, or 'none' to disable tools (e.g., 'my_tools.py', 'opik_optimizer.utils.core', or 'none') (default: DEMO)",
+        help="Path to tools file, module name, URL to download from, or 'none' to disable tools (e.g., 'my_tools.py', 'opik_optimizer.utils.core', 'https://example.com/tools.py', or 'none') (default: DEMO)",
     )
     parser.add_argument(
         "--transport",
@@ -233,9 +233,20 @@ async def main() -> None:
             load_tools_from_file(args.tools_file)
             print(f"✓ Loaded tools from {args.tools_file}")
         else:
-            # Treat as module name
-            load_tools_from_module(args.tools_file)
-            print(f"✓ Loaded tools from module {args.tools_file}")
+            # Could be URL or module name - use common utility to resolve
+            from .utils import resolve_tools_file_path
+
+            resolved_tools_file = resolve_tools_file_path(args.tools_file)
+
+            # Check if it was a URL (resolved path will be different from original)
+            if resolved_tools_file != args.tools_file:
+                # It was a URL that got downloaded
+                load_tools_from_file(resolved_tools_file)
+                print(f"✓ Loaded tools from URL: {args.tools_file}")
+            else:
+                # It's a module name
+                load_tools_from_module(args.tools_file)
+                print(f"✓ Loaded tools from module {args.tools_file}")
     except Exception as e:
         print(f"❌ Failed to load tools from {args.tools_file}: {e}")
         sys.exit(1)

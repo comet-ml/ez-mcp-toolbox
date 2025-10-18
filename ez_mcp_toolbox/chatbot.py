@@ -344,6 +344,11 @@ class MCPChatbot:
         """Connect to all configured MCP servers via subprocess."""
         # Load MCP configuration and connect
         if self.tools_file:
+            # Resolve tools file path (download from URL if necessary)
+            from .utils import resolve_tools_file_path
+
+            resolved_tools_file = resolve_tools_file_path(self.tools_file, self.console)
+
             # Create dynamic MCP server configuration using tools file
             from .mcp_utils import ServerConfig
 
@@ -352,11 +357,11 @@ class MCPChatbot:
                     name="ez-mcp-server",
                     description="Ez MCP server for tool discovery and execution",
                     command="ez-mcp-server",
-                    args=[self.tools_file],
+                    args=[resolved_tools_file],
                 )
             ]
             self.console.print(
-                f"📡 Created MCP server configuration with tools file: {self.tools_file}"
+                f"📡 Created MCP server configuration with tools file: {resolved_tools_file}"
             )
             await self.mcp_manager.connect_all_servers(servers)
         else:
@@ -1627,7 +1632,7 @@ Examples:
     parser.add_argument(
         "--tools-file",
         type=str,
-        help="Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.",
+        help="Path to a Python file containing tool definitions, or URL to download the file from. If provided, will create an MCP server configuration using this file.",
     )
 
     parser.add_argument(

@@ -112,6 +112,12 @@ You can also load tools from installed Python modules:
 ez-mcp-server opik_optimizer.utils.core
 ```
 
+Or download tools from a URL:
+
+```bash
+ez-mcp-server https://example.com/my_tools.py
+```
+
 The server will automatically:
 - Load all functions from your file or module (no ez_mcp_toolbox imports required)
 - Convert them to MCP tools
@@ -128,7 +134,7 @@ ez-mcp-server [-h] [--transport {stdio,sse}] [--host HOST] [--port PORT] [--incl
 ```
 
 Positional arguments:
-  * `tools_file` - Path to tools file or module name (e.g., 'my_tools.py' or 'opik_optimizer.utils.core') (default: tools.py)
+  * `tools_file` - Path to tools file, module name, or URL to download from (e.g., 'my_tools.py', 'opik_optimizer.utils.core', or 'https://example.com/tools.py') (default: tools.py)
 
 Options:
   * `-h`, `--help` - show this help message and exit
@@ -330,6 +336,9 @@ ez-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --d
 # Use custom tools file
 ez-mcp-chatbot --tools-file "my_tools.py"
 
+# Use tools file from URL
+ez-mcp-chatbot --tools-file "https://example.com/my_tools.py"
+
 # Override model arguments
 ez-mcp-chatbot --model-args '{"temperature": 0.7, "max_tokens": 1000}'
 
@@ -345,7 +354,7 @@ ez-mcp-chatbot --model "openai/gpt-4" --model-args '{"temperature": 0.3, "max_to
 - `--init` - Create a default ez-config.json file and exit
 - `--model MODEL` - Override the model specified in the config file
 - `--model-args MODEL_ARGS` - JSON string of additional keyword arguments to pass to the LLM model
-- `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.
+- `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions, or URL to download the file from. If provided, will create an MCP server configuration using this file.
 - `config_path` - Path to the configuration file (default: ez-config.json)
 
 ## ez-mcp-eval
@@ -395,7 +404,7 @@ ez-mcp-eval [-h] --prompt PROMPT --dataset DATASET --metric METRIC
 - `--model-kwargs MODEL_KWARGS` - JSON string of additional keyword arguments for the LLM model
 - `--metrics-file METRICS_FILE` - Path to a Python file containing metric definitions (alternative to using opik.evaluation.metrics)
 - `--config CONFIG` - Path to MCP server configuration file (default: ez-config.json)
-- `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions. If provided, will create an MCP server configuration using this file.
+- `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions, or URL to download the file from. If provided, will create an MCP server configuration using this file.
 
 ### Dataset Loading
 
@@ -488,6 +497,9 @@ ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "Cust
 ```bash
 # Use a custom tools file for MCP server configuration
 ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --tools-file "my_tools.py"
+
+# Use tools file from URL
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --tools-file "https://example.com/my_tools.py"
 ```
 
 #### List Available Metrics
