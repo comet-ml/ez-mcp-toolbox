@@ -17,7 +17,8 @@ from typing import Any, Dict, List, Callable, Optional, Union
 
 from mcp import Tool
 from rich.console import Console
-from opik import track
+from opik import track, Opik
+from opik.evaluation import metrics as opik_metrics
 import opik
 
 # Suppress litellm RuntimeWarning about coroutines never awaited
@@ -886,6 +887,126 @@ def run_async_in_sync_context(async_func, *args, **kwargs):
 
     # Run the async function
     return asyncio.run(_call_async())
+
+
+# =============================================================================
+# Shared helpers used by optimizer and evaluator
+# =============================================================================
+
+
+def init_opik_and_load_dataset(dataset_name: str, console: Console) -> tuple[Opik, Any]:
+    """Initialize Opik client and load dataset by name with fallback to opik_optimizer.datasets."""
+    client = Opik()
+    console.print(f"📊 Loading dataset: {dataset_name}")
+
+    try:
+        dataset = client.get_dataset(name=dataset_name)
+        console.print("✅ Dataset loaded successfully from Opik")
+    except Exception as opik_error:
+        console.print(f"⚠️  Dataset not found in Opik: {opik_error}")
+        console.print("🔍 Checking opik_optimizer.datasets...")
+        import opik_optimizer.datasets as optimizer_datasets
+
+        if hasattr(optimizer_datasets, dataset_name):
+            dataset_func = getattr(optimizer_datasets, dataset_name)
+            console.print(
+                f"📦 Creating dataset using opik_optimizer.datasets.{dataset_name}"
+            )
+            dataset = dataset_func()
+            console.print("✅ Dataset created successfully from opik_optimizer")
+        else:
+            raise AttributeError(
+                f"Dataset function '{dataset_name}' not found in opik_optimizer.datasets"
+            )
+
+    return client, dataset
+
+
+def resolve_prompt_with_opik(client: Opik, prompt_value: str, console: Console) -> str:
+    """Resolve prompt by name via Opik, falling back to the provided value."""
+    try:
+        console.print(f"🔍 Looking up prompt '{prompt_value}' in Opik...")
+        prompt = client.get_prompt(name=prompt_value)
+        prompt_content = prompt.prompt if hasattr(prompt, "prompt") else str(prompt)
+        if not prompt_content or prompt_content == "None":
+            console.print(
+                "⚠️  Prompt found in Opik but content is None/empty/'None', using original prompt value"
+            )
+            return prompt_value
+        console.print(
+            f"✅ Found prompt in Opik: {prompt_content[:100]}{'...' if len(prompt_content) > 100 else ''}"
+        )
+        return prompt_content
+    except Exception as e:
+        console.print(
+            f"⚠️  Prompt '{prompt_value}' not found in Opik ({e}), using as direct prompt"
+        )
+        return prompt_value
+
+
+def _list_available_metrics_from_module(metrics_module: Any) -> List[str]:
+    """List all callable metric names from a metrics module."""
+    return sorted(
+        [
+            name
+            for name in dir(metrics_module)
+            if not name.startswith("_") and callable(getattr(metrics_module, name))
+        ]
+    )
+
+
+def _load_metrics_from_file(file_path: str, console: Optional[Console] = None) -> Any:
+    """Load a Python module from file to source custom metrics."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Metric file not found: {file_path}")
+    spec = importlib.util.spec_from_file_location("metric_module", file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load module from {file_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if console:
+        console.print(f"✅ Loaded metrics from file: {file_path}")
+    return module
+
+
+def load_metrics_by_names(
+    metric_names_csv: str, metrics_file: Optional[str], console: Console
+) -> List[Any]:
+    """Instantiate metrics by name from an optional custom file or opik.evaluation.metrics."""
+    names = [name.strip() for name in metric_names_csv.split(",")]
+    metric_instances: List[Any] = []
+    custom_module = (
+        _load_metrics_from_file(metrics_file, console) if metrics_file else None
+    )
+
+    for metric_name in names:
+        metric_class = None
+        source_module = None
+        if custom_module and hasattr(custom_module, metric_name):
+            metric_class = getattr(custom_module, metric_name)
+            source_module = "custom metrics file"
+        else:
+            if hasattr(opik_metrics, metric_name):
+                metric_class = getattr(opik_metrics, metric_name)
+                source_module = "opik.evaluation.metrics"
+
+        if metric_class is None:
+            console.print(f"❌ Unknown metric '{metric_name}'. Available metrics:")
+            if custom_module:
+                console.print("   From custom metrics file:")
+                for available_metric in _list_available_metrics_from_module(
+                    custom_module
+                ):
+                    console.print(f"     - {available_metric}")
+            console.print("   From opik.evaluation.metrics:")
+            for available_metric in _list_available_metrics_from_module(opik_metrics):
+                console.print(f"     - {available_metric}")
+            raise ValueError(f"Unknown metric: {metric_name}")
+
+        metric_instances.append(metric_class())
+        console.print(f"✅ Loaded metric: {metric_name} (from {source_module})")
+
+    return metric_instances
 
 
 # Global set to track temporary files for cleanup

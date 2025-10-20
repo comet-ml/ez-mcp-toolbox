@@ -11,14 +11,12 @@ import asyncio
 import json
 import sys
 import importlib.util
-import os
 import warnings
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
-from opik import Opik
 from opik.evaluation import evaluate
-from opik.evaluation import metrics
+from opik.evaluation import metrics as opik_metrics
 from rich.console import Console
 from dotenv import load_dotenv
 
@@ -28,6 +26,9 @@ from .utils import (
     extract_llm_content,
     format_tool_result,
     format_assistant_tool_calls,
+    init_opik_and_load_dataset,
+    resolve_prompt_with_opik,
+    load_metrics_by_names,
 )
 from .mcp_utils import MCPManager, ServerConfig
 
@@ -85,35 +86,9 @@ class MCPEvaluator:
         """Initialize Opik client and load dataset."""
         try:
             self.console.print("🔗 Connecting to Opik...")
-            self.client = Opik()
-
-            self.console.print(f"📊 Loading dataset: {self.config.dataset}")
-
-            # First try to get the dataset from opik
-            try:
-                self.dataset = self.client.get_dataset(name=self.config.dataset)
-                self.console.print("✅ Dataset loaded successfully from Opik")
-            except Exception as opik_error:
-                # If dataset not found in opik, try opik_optimizer.datasets
-                self.console.print(f"⚠️  Dataset not found in Opik: {opik_error}")
-                self.console.print("🔍 Checking opik_optimizer.datasets...")
-
-                import opik_optimizer.datasets as optimizer_datasets
-
-                # Check if the dataset function exists in opik_optimizer.datasets
-                if hasattr(optimizer_datasets, self.config.dataset):
-                    dataset_func = getattr(optimizer_datasets, self.config.dataset)
-                    self.console.print(
-                        f"📦 Creating dataset using opik_optimizer.datasets.{self.config.dataset}"
-                    )
-                    self.dataset = dataset_func()
-                    self.console.print(
-                        "✅ Dataset created successfully from opik_optimizer"
-                    )
-                else:
-                    raise AttributeError(
-                        f"Dataset function '{self.config.dataset}' not found in opik_optimizer.datasets"
-                    )
+            self.client, self.dataset = init_opik_and_load_dataset(
+                self.config.dataset, self.console
+            )
 
             self.console.print(f"   - Dataset name: {self.config.dataset}")
             if self.dataset is not None:
@@ -130,30 +105,9 @@ class MCPEvaluator:
     def resolve_prompt(self, prompt_value: str) -> str:
         """Resolve prompt by first checking Opik for a prompt with that name, then fallback to direct value."""
         try:
-            # First try to get the prompt from Opik by name
-            self.console.print(f"🔍 Looking up prompt '{prompt_value}' in Opik...")
             if self.client is None:
                 raise RuntimeError("Opik client not initialized")
-            prompt = self.client.get_prompt(name=prompt_value)
-
-            # If found, use the prompt content
-            prompt_content = prompt.prompt if hasattr(prompt, "prompt") else str(prompt)
-
-            # If the prompt content is None, empty, or the string 'None', fall back to the original prompt value
-            if (
-                prompt_content is None
-                or prompt_content == ""
-                or prompt_content == "None"
-            ):
-                self.console.print(
-                    "⚠️  Prompt found in Opik but content is None/empty/'None', using original prompt value"
-                )
-                return prompt_value
-
-            self.console.print(
-                f"✅ Found prompt in Opik: {prompt_content[:100]}{'...' if len(prompt_content) > 100 else ''}"
-            )
-            return prompt_content
+            return resolve_prompt_with_opik(self.client, prompt_value, self.console)
 
         except Exception as e:
             # If not found or any error, use the prompt value directly
@@ -285,98 +239,19 @@ class MCPEvaluator:
         return evaluation_task
 
     def get_metrics(self) -> List[Any]:
-        """Get the metrics to use for evaluation."""
-        metric_names = [name.strip() for name in self.config.metric.split(",")]
-        metric_instances = []
-
-        # Determine the metrics module to use
-        if self.config.metrics_file:
-            custom_metrics_module = self._load_metrics_from_file(
-                self.config.metrics_file
-            )
-        else:
-            custom_metrics_module = None
-
-        for metric_name in metric_names:
-            metric_name = metric_name.strip()
-            metric_class = None
-            source_module = None
-
-            # First try to get the metric from custom metrics file if provided
-            if custom_metrics_module:
-                try:
-                    metric_class = getattr(custom_metrics_module, metric_name)
-                    source_module = "custom metrics file"
-                except AttributeError:
-                    pass
-
-            # If not found in custom metrics, try opik.evaluation.metrics as fallback
-            if metric_class is None:
-                try:
-                    metric_class = getattr(metrics, metric_name)
-                    source_module = "opik.evaluation.metrics"
-                except AttributeError:
-                    pass
-
-            # If still not found, show error with available metrics
-            if metric_class is None:
-                self.console.print(
-                    f"❌ Unknown metric '{metric_name}'. Available metrics:"
-                )
-
-                # Show available metrics from both sources
-                if custom_metrics_module:
-                    available_custom_metrics = self._list_available_metrics_from_module(
-                        custom_metrics_module
-                    )
-                    self.console.print("   From custom metrics file:")
-                    for available_metric in available_custom_metrics:
-                        self.console.print(f"     - {available_metric}")
-
-                available_opik_metrics = self._list_available_metrics_from_module(
-                    metrics
-                )
-                self.console.print("   From opik.evaluation.metrics:")
-                for available_metric in available_opik_metrics:
-                    self.console.print(f"     - {available_metric}")
-
-                raise ValueError(f"Unknown metric: {metric_name}")
-
-            metric_instances.append(metric_class())
-            self.console.print(
-                f"✅ Loaded metric: {metric_name} (from {source_module})"
-            )
-
-        return metric_instances
+        return load_metrics_by_names(
+            self.config.metric, self.config.metrics_file, self.console
+        )
 
     def _load_metrics_from_file(self, file_path: str) -> Any:
-        """Load metrics from a Python file."""
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Metric file not found: {file_path}")
+        from .utils import _load_metrics_from_file as _load
 
-        try:
-            # Load the module from file
-            spec = importlib.util.spec_from_file_location("metric_module", file_path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"Could not load module from {file_path}")
-
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-
-            self.console.print(f"✅ Loaded metrics from file: {file_path}")
-            return module
-        except Exception as e:
-            self.console.print(f"❌ Error loading metrics from file {file_path}: {e}")
-            raise
+        return _load(file_path, self.console)
 
     def _list_available_metrics_from_module(self, metrics_module: Any) -> List[str]:
-        """List all available metrics from a metrics module."""
-        available_metrics = [
-            name
-            for name in dir(metrics_module)
-            if not name.startswith("_") and callable(getattr(metrics_module, name))
-        ]
-        return sorted(available_metrics)
+        from .utils import _list_available_metrics_from_module as _list
+
+        return _list(metrics_module)
 
     async def run_evaluation(self) -> Any:
         """Run the evaluation using Opik."""
@@ -916,8 +791,8 @@ def list_available_metrics() -> List[str]:
     """List all available metrics from opik.evaluation.metrics."""
     available_metrics = [
         name
-        for name in dir(metrics)
-        if not name.startswith("_") and callable(getattr(metrics, name))
+        for name in dir(opik_metrics)
+        if not name.startswith("_") and callable(getattr(opik_metrics, name))
     ]
     return sorted(available_metrics)
 

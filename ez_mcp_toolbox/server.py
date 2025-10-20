@@ -108,8 +108,15 @@ async def list_tools() -> List[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Handle tool calls."""
-    return registry.call_tool(name, arguments)
+    """Handle tool calls with timeout to prevent hangs."""
+    import asyncio
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(registry.call_tool, name, arguments), timeout=25.0
+        )
+    except asyncio.TimeoutError:
+        return [{"type": "text", "text": f"Error calling tool {name}: timeout"}]
 
 
 # SSE transport implementation
@@ -128,7 +135,7 @@ async def sse_endpoint() -> StreamingResponse:
         # Add client to the set
         client_id = id(asyncio.current_task())
         _sse_clients.add(client_id)
-        print(f"🔌 SSE client connected: {client_id}")
+        print(f"🔌 SSE client connected: {client_id}", file=sys.stderr)
 
         try:
             while True:
@@ -140,7 +147,7 @@ async def sse_endpoint() -> StreamingResponse:
                     # Send keepalive
                     yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
         except asyncio.CancelledError:
-            print(f"🔌 SSE client disconnected: {client_id}")
+            print(f"🔌 SSE client disconnected: {client_id}", file=sys.stderr)
         finally:
             _sse_clients.discard(client_id)
 
@@ -161,7 +168,7 @@ async def message_endpoint(request: Request) -> Dict[str, Any]:
     """HTTP POST endpoint for client-to-server communication."""
     try:
         data = await request.json()
-        print(f"📨 Received message: {data}")
+        print(f"📨 Received message: {data}", file=sys.stderr)
 
         # Process the message through the MCP server
         # This is a simplified implementation - in a real scenario,
@@ -185,10 +192,10 @@ async def health_check() -> Dict[str, str]:
 
 async def start_sse_server(host: str, port: int) -> None:
     """Start the SSE server."""
-    print(f"🚀 Starting SSE server on {host}:{port}")
-    print(f"📡 SSE endpoint: http://{host}:{port}/sse")
-    print(f"📨 Messages endpoint: http://{host}:{port}/messages")
-    print(f"🏥 Health check: http://{host}:{port}/health")
+    print(f"🚀 Starting SSE server on {host}:{port}", file=sys.stderr)
+    print(f"📡 SSE endpoint: http://{host}:{port}/sse", file=sys.stderr)
+    print(f"📨 Messages endpoint: http://{host}:{port}/messages", file=sys.stderr)
+    print(f"🏥 Health check: http://{host}:{port}/health", file=sys.stderr)
 
     config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server_instance = uvicorn.Server(config)
@@ -197,7 +204,7 @@ async def start_sse_server(host: str, port: int) -> None:
 
 def signal_handler(signum: int, frame: Any) -> None:
     """Handle shutdown signals gracefully."""
-    print("\n🛑 Received shutdown signal, cleaning up...")
+    print("\n🛑 Received shutdown signal, cleaning up...", file=sys.stderr)
     if _server_task and not _server_task.done():
         _server_task.cancel()
     # Force immediate exit to avoid waiting for stdin
@@ -211,9 +218,13 @@ async def main() -> None:
     # Parse command line arguments
     args = parse_args()
 
-    print("🚀 Ez MCP Server Starting...")
-    print(f"🚌 Transport: {args.transport}")
-    print(f"📁 Tools file: {args.tools_file}")
+    # Check for quiet mode (used by isolated tool calls)
+    quiet_mode = os.getenv("EZ_MCP_QUIET") == "1"
+
+    if not quiet_mode:
+        print("🚀 Ez MCP Server Starting...", file=sys.stderr)
+        print(f"🚌 Transport: {args.transport}", file=sys.stderr)
+        print(f"📁 Tools file: {args.tools_file}", file=sys.stderr)
 
     # Set up signal handlers for clean shutdown
     signal.signal(signal.SIGINT, signal_handler)
@@ -223,15 +234,18 @@ async def main() -> None:
     try:
         if args.tools_file == "none":
             # Skip loading any tools
-            print("✓ No tools loaded (tools_file set to 'none')")
+            if not quiet_mode:
+                print("✓ No tools loaded (tools_file set to 'none')", file=sys.stderr)
         elif args.tools_file == "DEMO" and not os.path.exists(args.tools_file):
             # No tools file provided and default doesn't exist, load example tools
             load_default_tools()
-            print("✓ Loaded default example tools from README")
+            if not quiet_mode:
+                print("✓ Loaded default example tools from README", file=sys.stderr)
         elif args.tools_file.endswith(".py"):
             # Treat as file path
             load_tools_from_file(args.tools_file)
-            print(f"✓ Loaded tools from {args.tools_file}")
+            if not quiet_mode:
+                print(f"✓ Loaded tools from {args.tools_file}", file=sys.stderr)
         else:
             # Could be URL or module name - use common utility to resolve
             from .utils import resolve_tools_file_path
@@ -242,34 +256,48 @@ async def main() -> None:
             if resolved_tools_file != args.tools_file:
                 # It was a URL that got downloaded
                 load_tools_from_file(resolved_tools_file)
-                print(f"✓ Loaded tools from URL: {args.tools_file}")
+                if not quiet_mode:
+                    print(
+                        f"✓ Loaded tools from URL: {args.tools_file}", file=sys.stderr
+                    )
             else:
                 # It's a module name
                 load_tools_from_module(args.tools_file)
-                print(f"✓ Loaded tools from module {args.tools_file}")
+                if not quiet_mode:
+                    print(
+                        f"✓ Loaded tools from module {args.tools_file}", file=sys.stderr
+                    )
     except Exception as e:
-        print(f"❌ Failed to load tools from {args.tools_file}: {e}")
+        print(f"❌ Failed to load tools from {args.tools_file}: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Apply tool filtering if specified
     if args.include or args.exclude:
         try:
             registry.filter_tools(args.include, args.exclude)
-            print(
-                f"✓ Applied tool filtering (include: {args.include}, exclude: {args.exclude})"
-            )
+            if not quiet_mode:
+                print(
+                    f"✓ Applied tool filtering (include: {args.include}, exclude: {args.exclude})",
+                    file=sys.stderr,
+                )
         except re.error as e:
-            print(f"❌ Invalid regex pattern: {e}")
+            print(f"❌ Invalid regex pattern: {e}", file=sys.stderr)
             sys.exit(1)
 
     # Initialize session context
     try:
         initialize_session()
-        print("✓ Session initialized")
+        if not quiet_mode:
+            print("✓ Session initialized", file=sys.stderr)
     except Exception as e:
-        print(f"⚠️  Session initialization failed: {e}")
+        if not quiet_mode:
+            print(f"⚠️  Session initialization failed: {e}", file=sys.stderr)
 
-    print(f"🔧 Available tools: {[tool.name for tool in registry.get_tools()]}")
+    if not quiet_mode:
+        print(
+            f"🔧 Available tools: {[tool.name for tool in registry.get_tools()]}",
+            file=sys.stderr,
+        )
 
     try:
         if args.transport == "stdio":
@@ -290,15 +318,15 @@ async def main() -> None:
             print(f"❌ Unknown transport: {args.transport}")
             sys.exit(1)
     except asyncio.CancelledError:
-        print("🛑 Server shutdown completed")
+        print("🛑 Server shutdown completed", file=sys.stderr)
         # Force immediate exit to avoid waiting for stdin
         os._exit(0)
     except KeyboardInterrupt:
-        print("\n🛑 Received keyboard interrupt, shutting down...")
+        print("\n🛑 Received keyboard interrupt, shutting down...", file=sys.stderr)
         # Force immediate exit to avoid waiting for stdin
         os._exit(0)
     except Exception as e:
-        print(f"❌ Server error: {e}")
+        print(f"❌ Server error: {e}", file=sys.stderr)
         raise
 
 
