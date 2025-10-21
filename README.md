@@ -51,7 +51,7 @@ You can customize the chatbot's behavior with a custom system prompt:
 
 ```bash
 # Use a custom system prompt
-ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"
+ez-mcp-chatbot --prompt "You are a helpful coding assistant"
 
 # Create a default configuration
 ez-mcp-chatbot --init
@@ -262,7 +262,10 @@ The chatbot automatically discovers and uses tools from connected MCP servers. S
 
 ## System Prompts
 
-The chatbot uses a system prompt to define its behavior and personality. You can customize this using the `--system-prompt` command line option.
+The chatbot uses a system prompt to define its behavior and personality. You can customize this using the `--prompt` command line option, which supports:
+- Direct strings: `--prompt "You are a helpful assistant"`
+- File paths: `--prompt ./my_prompt.txt`
+- Opik prompt names: `--prompt my_optimized_prompt`
 
 ### Default System Prompt
 
@@ -278,14 +281,16 @@ with any of the available tools.
 You can override the default system prompt to customize the chatbot's behavior:
 
 ```bash
-# Make it a coding assistant
-ez-mcp-chatbot --system-prompt "You are an expert Python developer who helps with coding tasks."
+# Direct string prompts
+ez-mcp-chatbot --prompt "You are an expert Python developer who helps with coding tasks."
+ez-mcp-chatbot --prompt "You are a data scientist who specializes in analyzing datasets and creating visualizations."
+ez-mcp-chatbot --prompt "You are a friendly AI assistant who loves to help users with their questions and tasks."
 
-# Make it a data analyst
-ez-mcp-chatbot --system-prompt "You are a data scientist who specializes in analyzing datasets and creating visualizations."
+# Load prompt from file
+ez-mcp-chatbot --prompt ./my_custom_prompt.txt
 
-# Make it more conversational
-ez-mcp-chatbot --system-prompt "You are a friendly AI assistant who loves to help users with their questions and tasks."
+# Load prompt from Opik (if you have optimized prompts stored there)
+ez-mcp-chatbot --prompt my_optimized_coding_assistant
 ```
 
 The system prompt affects how the chatbot:
@@ -331,10 +336,10 @@ ez-mcp-chatbot --opik local
 ez-mcp-chatbot --opik disabled
 
 # Use custom system prompt
-ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"
+ez-mcp-chatbot --prompt "You are a helpful coding assistant"
 
 # Combine options
-ez-mcp-chatbot --system-prompt "You are a data analysis expert" --opik local --debug
+ez-mcp-chatbot --prompt "You are a data analysis expert" --opik local --debug
 
 # Use custom tools file
 ez-mcp-chatbot --tools-file "my_tools.py"
@@ -355,7 +360,7 @@ ez-mcp-chatbot --model "openai/gpt-4" --model-args '{"temperature": 0.3, "max_to
 - `--opik {local,hosted,disabled}` - Opik tracing mode (default: hosted)
 - `--init` - Create a default ez-config.json file and exit
 - `--debug` - Enable debug output during processing
-- `--system-prompt TEXT` - Custom system prompt for the chatbot (overrides default)
+- `--prompt TEXT` - Custom system prompt for the chatbot (overrides default)
 - `--model MODEL` - Override the model specified in the config file
 - `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions, or URL to download the file from. If provided, will create an MCP server configuration using this file.
 - `--model-args MODEL_ARGS` - JSON string of additional keyword arguments to pass to the LLM model

@@ -91,7 +91,7 @@ class MCPManager:
 
         return servers
 
-    async def connect_all_servers(self, servers: List[ServerConfig]):
+    async def connect_all_servers(self, servers: List[ServerConfig]) -> None:
         """Connect to all configured MCP servers via subprocess."""
         if not servers:
             return
@@ -117,7 +117,7 @@ class MCPManager:
                     f"[red]✗[/red] Failed to connect to [bold]{server_config.name}[/bold]: {e}"
                 )
 
-    async def _connect_server(self, server_config: ServerConfig):
+    async def _connect_server(self, server_config: ServerConfig) -> None:
         """Connect to a single MCP server via subprocess."""
         # Set up environment variables for the subprocess
         if server_config.env:
@@ -131,7 +131,7 @@ class MCPManager:
             # Create MCP client session using stdio client
             params = StdioServerParameters(
                 command=server_config.command,
-                args=server_config.args,
+                args=server_config.args or [],
             )
 
             transport = await self.exit_stack.enter_async_context(stdio_client(params))
@@ -183,7 +183,7 @@ class MCPManager:
         return all_tools
 
     @track(name="execute_tool_call", type="tool")
-    async def execute_tool_call(self, tool_call) -> Any:
+    async def execute_tool_call(self, tool_call: Any) -> Any:
         """Execute a tool call on the appropriate MCP server."""
 
         fn_name = tool_call.function.name
@@ -284,7 +284,9 @@ class MCPManager:
         env = (cfg.env or {}).copy()
         env["EZ_MCP_QUIET"] = "1"
 
-        params = StdioServerParameters(command=cfg.command, args=cfg.args, env=env)
+        params = StdioServerParameters(
+            command=cfg.command, args=cfg.args or [], env=env
+        )
         async with stdio_client(params) as (stdin, write):
             async with ClientSession(stdin, write) as session:
                 await session.initialize()
@@ -293,7 +295,7 @@ class MCPManager:
                 )
 
     # Thread-safe sync bridge to run execute_tool_call on the correct event loop
-    def execute_tool_call_sync(self, tool_call, timeout: float = 30.0) -> Any:
+    def execute_tool_call_sync(self, tool_call: Any, timeout: float = 30.0) -> Any:
         import asyncio
         import concurrent.futures
 
@@ -309,7 +311,7 @@ class MCPManager:
         except Exception as e:
             return f"Error executing tool '{getattr(getattr(tool_call, 'function', None), 'name', 'unknown')}': {e}"
 
-    def execute_tool_call_sync_safe(self, tool_call, timeout: float = 6.0) -> Any:
+    def execute_tool_call_sync_safe(self, tool_call: Any, timeout: float = 6.0) -> Any:
         """Synchronous tool execution that works from any thread without event loop conflicts."""
         import asyncio
         import concurrent.futures
@@ -327,7 +329,7 @@ class MCPManager:
                 return f"Error executing tool '{getattr(getattr(tool_call, 'function', None), 'name', 'unknown')}': {e}"
 
         # Otherwise, create a new event loop in a separate thread
-        def run_in_new_loop():
+        def run_in_new_loop() -> None:
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
             try:
@@ -344,12 +346,12 @@ class MCPManager:
         except Exception as e:
             return f"Error executing tool '{getattr(getattr(tool_call, 'function', None), 'name', 'unknown')}': {e}"
 
-    async def close(self):
+    async def close(self) -> None:
         """Close all MCP server connections."""
         await self.exit_stack.aclose()
 
 
-def _mcp_tools_to_openai_tools(tools_resp) -> List[Dict[str, Any]]:
+def _mcp_tools_to_openai_tools(tools_resp: Any) -> List[Dict[str, Any]]:
     """Map MCP tool spec to OpenAI function tools."""
     tools = []
     for t in tools_resp.tools:

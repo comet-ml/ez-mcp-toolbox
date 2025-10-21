@@ -24,6 +24,7 @@ from .utils import (
     extract_llm_content,
     format_tool_result,
     format_assistant_tool_calls,
+    resolve_prompt_with_opik,
 )
 from .mcp_utils import MCPManager
 
@@ -241,7 +242,7 @@ class MCPChatbot:
         self,
         config_path: str,
         system_prompt: str,
-        max_rounds: Optional[int] = 4,
+        max_rounds: Optional[int] = 10,
         debug: bool = False,
         model_override: Optional[str] = None,
         model_args_override: Optional[Dict[str, Any]] = None,
@@ -275,20 +276,20 @@ class MCPChatbot:
         # Set up persistent Python evaluation environment
         self._setup_python_environment()
 
-    def _setup_prompt_toolkit(self):
+    def _setup_prompt_toolkit(self) -> None:
         """Set up prompt_toolkit for enhanced input handling with history and completion."""
         # Set up history file
         history_file = os.path.expanduser("~/.opik_mcp_chatbot_history")
 
         # Create prompt session with history and completion
-        self.prompt_session = PromptSession(
+        self.prompt_session: PromptSession = PromptSession(
             history=FileHistory(history_file),
             completer=ChatbotCompleter(),
             auto_suggest=AutoSuggestFromHistory(),
             complete_while_typing=True,
         )
 
-    def _setup_python_environment(self):
+    def _setup_python_environment(self) -> None:
         """Set up persistent Python evaluation environment."""
         # Create persistent execution environment
         self.python_globals = {
@@ -340,7 +341,7 @@ class MCPChatbot:
 
         return config.get("mcp_servers", []), model, model_kwargs
 
-    async def connect_all_servers(self):
+    async def connect_all_servers(self) -> None:
         """Connect to all configured MCP servers via subprocess."""
         # Load MCP configuration and connect
         if self.tools_file:
@@ -473,10 +474,10 @@ class MCPChatbot:
             error_msg = traceback.format_exc()
             return f"🐍 Python Error:\n{error_msg}"
 
-    def _create_await_helper(self):
+    def _create_await_helper(self) -> Any:
         """Create a helper function to run async code from sync context."""
 
-        def await_helper(coro):
+        def await_helper(coro: Any) -> Any:
             """Helper to run async code from sync context."""
             import asyncio
 
@@ -492,10 +493,10 @@ class MCPChatbot:
 
         return await_helper
 
-    def _create_direct_tool_runner(self):
+    def _create_direct_tool_runner(self) -> Any:
         """Create a helper function to run tools via MCP sessions."""
 
-        def run_tool(tool_identifier: str, **kwargs):
+        def run_tool(tool_identifier: str, **kwargs) -> str:
             """Helper to run tools - accepts SERVER.TOOL format.
 
             Args:
@@ -515,7 +516,7 @@ class MCPChatbot:
                     return f"Error: Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
 
                 # Create async function to call the tool
-                async def _call_tool():
+                async def _call_tool() -> Any:
                     session = self.mcp_manager.sessions[server_name]
                     try:
                         result = await session.call_tool(tool_name, kwargs)
@@ -528,7 +529,15 @@ class MCPChatbot:
                                     isinstance(content_data, list)
                                     and len(content_data) > 0
                                 ):
-                                    if content_data[0].get("type") == "text":
+                                    if (
+                                        hasattr(content_data[0], "type")
+                                        and content_data[0].type == "text"
+                                    ):
+                                        return content_data[0].text
+                                    elif (
+                                        isinstance(content_data[0], dict)
+                                        and content_data[0].get("type") == "text"
+                                    ):
                                         return content_data[0]["text"]
                                     else:
                                         # Extract text content from list of content items
@@ -539,7 +548,7 @@ class MCPChatbot:
                                             elif (
                                                 isinstance(item, dict)
                                                 and "text" in item
-                                            ):
+                                            ):  # type: ignore
                                                 text_parts.append(item["text"])
                                             else:
                                                 text_parts.append(str(item))
@@ -565,7 +574,7 @@ class MCPChatbot:
                     # Fallback: try to run in a new thread with new event loop
                     import concurrent.futures
 
-                    def run_in_thread():
+                    def run_in_thread() -> Any:
                         new_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(new_loop)
                         try:
@@ -585,10 +594,10 @@ class MCPChatbot:
 
         return run_tool
 
-    def _create_direct_tool_runner_return(self):
+    def _create_direct_tool_runner_return(self) -> Any:
         """Create a helper function to run tools via MCP sessions that returns the result."""
 
-        def run_tool_return(tool_identifier: str, **kwargs):
+        def run_tool_return(tool_identifier: str, **kwargs) -> Any:
             """Helper to run tools - accepts SERVER.TOOL format and returns the result.
 
             Args:
@@ -611,7 +620,7 @@ class MCPChatbot:
                     return f"Error: Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
 
                 # Create async function to call the tool
-                async def _call_tool():
+                async def _call_tool() -> Any:
                     session = self.mcp_manager.sessions[server_name]
                     try:
                         result = await session.call_tool(tool_name, kwargs)
@@ -624,7 +633,15 @@ class MCPChatbot:
                                     isinstance(content_data, list)
                                     and len(content_data) > 0
                                 ):
-                                    if content_data[0].get("type") == "text":
+                                    if (
+                                        hasattr(content_data[0], "type")
+                                        and content_data[0].type == "text"
+                                    ):
+                                        return content_data[0].text
+                                    elif (
+                                        isinstance(content_data[0], dict)
+                                        and content_data[0].get("type") == "text"
+                                    ):
                                         return content_data[0]["text"]
                                     else:
                                         # Extract text content from list of content items
@@ -635,7 +652,7 @@ class MCPChatbot:
                                             elif (
                                                 isinstance(item, dict)
                                                 and "text" in item
-                                            ):
+                                            ):  # type: ignore
                                                 text_parts.append(item["text"])
                                             else:
                                                 text_parts.append(str(item))
@@ -660,7 +677,7 @@ class MCPChatbot:
                     # Fallback: try to run in a new thread with new event loop
                     import concurrent.futures
 
-                    def run_in_thread():
+                    def run_in_thread() -> Any:
                         new_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(new_loop)
                         try:
@@ -678,10 +695,10 @@ class MCPChatbot:
 
         return run_tool_return
 
-    def _create_direct_tool_getter(self):
+    def _create_direct_tool_getter(self) -> Any:
         """Create a helper function to get tools via MCP sessions."""
 
-        def get_tools(server_name: str = None):
+        def get_tools(server_name: Optional[str] = None) -> None:
             """Helper to get tools - prints rich formatted list of tools."""
             try:
                 # If no server specified, show all servers and their tools
@@ -696,7 +713,7 @@ class MCPChatbot:
                         return None
 
                     # Create async function to get all tools for all servers
-                    async def _get_all_tools_data():
+                    async def _get_all_tools_data() -> Any:
                         all_data = []
                         for srv_name in self.mcp_manager.sessions.keys():
                             try:
@@ -737,7 +754,7 @@ class MCPChatbot:
                         # Fallback: try to run in a new thread with new event loop
                         import concurrent.futures
 
-                        def run_in_thread():
+                        def run_in_thread() -> Any:
                             new_loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(new_loop)
                             try:
@@ -797,7 +814,7 @@ class MCPChatbot:
                     return None
 
                 # Create async function to get tools for specific server
-                async def _get_tools_data():
+                async def _get_tools_data() -> Any:
                     session = self.mcp_manager.sessions[server_name]
                     try:
                         tools_resp = await session.list_tools()
@@ -827,7 +844,7 @@ class MCPChatbot:
                     # Fallback: try to run in a new thread with new event loop
                     import concurrent.futures
 
-                    def run_in_thread():
+                    def run_in_thread() -> Any:
                         new_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(new_loop)
                         try:
@@ -862,10 +879,10 @@ class MCPChatbot:
 
         return get_tools
 
-    def _create_direct_tool_info_getter(self):
+    def _create_direct_tool_info_getter(self) -> Any:
         """Create a helper function to get detailed tool information via MCP sessions."""
 
-        def get_tool_info(tool_identifier: str):
+        def get_tool_info(tool_identifier: str) -> None:
             """Helper to get detailed information about a specific tool.
 
             Args:
@@ -887,7 +904,7 @@ class MCPChatbot:
                     return f"Error: Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
 
                 # Create async function to get tool info
-                async def _get_tool_info():
+                async def _get_tool_info() -> Any:
                     session = self.mcp_manager.sessions[server_name]
                     try:
                         tools_resp = await session.list_tools()
@@ -951,7 +968,7 @@ class MCPChatbot:
                     # Fallback: try to run in a new thread with new event loop
                     import concurrent.futures
 
-                    def run_in_thread():
+                    def run_in_thread() -> Any:
                         new_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(new_loop)
                         try:
@@ -976,9 +993,9 @@ class MCPChatbot:
         self,
         model: str,
         messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] = None,
-        **kwargs,
-    ):
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs: Any,
+    ) -> Any:
         """Call LLM with proper Opik span management."""
         # Use the common utility function for consistent LLM processing
         return call_llm_with_tracing(
@@ -1101,7 +1118,7 @@ class MCPChatbot:
 
         return text_reply
 
-    def clear_messages(self):
+    def clear_messages(self) -> None:
         """Clear the message history, keeping only the system prompt."""
         self.messages = [
             {
@@ -1118,7 +1135,7 @@ class MCPChatbot:
         """Get the number of messages in the history (excluding system prompt)."""
         return len(self.messages) - 1  # Subtract 1 for system prompt
 
-    async def run(self):
+    async def run(self) -> None:
         """Run the complete chat session with server connections and chat loop."""
         try:
             self.console.print("[bold blue]Loaded configuration[/bold blue]")
@@ -1238,10 +1255,10 @@ class MCPChatbot:
             self.console.print("\n[dim]Shutting down ez-mcp-chatbot...[/dim]")
             await self.close()
 
-    async def close(self):
+    async def close(self) -> None:
         await self.mcp_manager.close()
 
-    async def _handle_show_tools(self, server_name: str = None):
+    async def _handle_show_tools(self, server_name: Optional[str] = None) -> None:
         """Handle /show tools and /show tools NAME commands."""
         try:
             # If no server specified, show all servers and their tools
@@ -1254,7 +1271,7 @@ class MCPChatbot:
                     return
 
                 # Create async function to get all tools for all servers
-                async def _get_all_tools_data():
+                async def _get_all_tools_data() -> Any:
                     all_data = []
                     for srv_name in self.mcp_manager.sessions.keys():
                         try:
@@ -1295,7 +1312,7 @@ class MCPChatbot:
                     # Fallback: try to run in a new thread with new event loop
                     import concurrent.futures
 
-                    def run_in_thread():
+                    def run_in_thread() -> Any:
                         new_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(new_loop)
                         try:
@@ -1351,7 +1368,7 @@ class MCPChatbot:
                 return
 
             # Create async function to get tools for specific server
-            async def _get_tools_data():
+            async def _get_tools_data() -> Any:
                 session = self.mcp_manager.sessions[server_name]
                 try:
                     tools_resp = await session.list_tools()
@@ -1381,7 +1398,7 @@ class MCPChatbot:
                 # Fallback: try to run in a new thread with new event loop
                 import concurrent.futures
 
-                def run_in_thread():
+                def run_in_thread() -> Any:
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
                     try:
@@ -1411,7 +1428,7 @@ class MCPChatbot:
             self.console.print("[bold red]## Error[/bold red]")
             self.console.print(f"Error getting tools: {e}")
 
-    async def _handle_run_tool(self, tool_command: str):
+    async def _handle_run_tool(self, tool_command: str) -> None:
         """Handle /run SERVER.TOOL [args] commands."""
         try:
             # Parse the tool command
@@ -1487,7 +1504,7 @@ class MCPChatbot:
         except Exception as e:
             self.console.print(f"[red]Error executing tool '{tool_command}': {e}[/red]")
 
-    def list_available_tools(self):
+    def list_available_tools(self) -> None:
         """
         List all available MCP tools that can be executed.
         Returns a list of tool names and descriptions.
@@ -1516,7 +1533,7 @@ class MCPChatbot:
         except Exception as e:
             return f"Error getting tools: {e}"
 
-    def call_session_tool(self, server_name: str, tool_name: str, **kwargs):
+    def call_session_tool(self, server_name: str, tool_name: str, **kwargs) -> Any:
         """
         Directly call a tool on a specific MCP server session.
         This bypasses the tool call infrastructure for direct execution.
@@ -1531,7 +1548,7 @@ class MCPChatbot:
         """
         import asyncio
 
-        async def _call_tool():
+        async def _call_tool() -> Any:
             if server_name not in self.mcp_manager.sessions:
                 return f"Error: Server '{server_name}' not found. Available: {list(self.mcp_manager.sessions.keys())}"
 
@@ -1586,7 +1603,9 @@ Examples:
   ez-mcp-chatbot --opik hosted      # Use hosted Opik instance
   ez-mcp-chatbot --opik disabled    # Disable Opik tracing
   ez-mcp-chatbot --init             # Create default ez-config.json
-  ez-mcp-chatbot --system-prompt "You are a helpful coding assistant"  # Custom system prompt
+  ez-mcp-chatbot --prompt "You are a helpful coding assistant"  # Direct string
+  ez-mcp-chatbot --prompt ./my_prompt.txt                     # Load from file
+  ez-mcp-chatbot --prompt my_optimized_prompt                  # Load from Opik
   ez-mcp-chatbot --model "openai/gpt-4"  # Override model from config
   ez-mcp-chatbot --model-args '{"temperature": 0.7, "max_tokens": 1000}'  # Override model args
   ez-mcp-chatbot --tools-file "my_tools.py"  # Use custom tools file
@@ -1618,9 +1637,9 @@ Examples:
     )
 
     parser.add_argument(
-        "--system-prompt",
+        "--prompt",
         type=str,
-        help="Custom system prompt for the chatbot (overrides default)",
+        help="Custom system prompt for the chatbot (overrides default). Can be a direct string, file path, or Opik prompt name.",
     )
 
     parser.add_argument(
@@ -1644,7 +1663,7 @@ Examples:
     return parser.parse_args()
 
 
-async def main():
+async def main() -> None:
     # Parse arguments
     args = parse_arguments()
 
@@ -1661,15 +1680,27 @@ async def main():
             console.print(f"❌ Invalid JSON in --model-args: {e}")
             sys.exit(1)
 
-    # Use provided system prompt or default
-    system_prompt = (
-        args.system_prompt
-        if args.system_prompt
-        else """
+    # Resolve system prompt using Opik if available, otherwise use direct value
+    console = Console()
+    system_prompt = None
+
+    if args.prompt:
+        try:
+            # Try to get Opik client for prompt resolution
+            from opik import Opik
+
+            client = Opik()
+            system_prompt = resolve_prompt_with_opik(client, args.prompt, console)
+        except Exception as e:
+            # If Opik is not available or fails, use the prompt value directly
+            console.print(f"⚠️  Opik not available ({e}), using prompt as direct string")
+            system_prompt = args.prompt
+    else:
+        # Use default system prompt
+        system_prompt = """
 You are a helpful AI system for answering questions that can be answered
 with any of the available tools.
 """
-    )
 
     bot = MCPChatbot(
         args.config_path,

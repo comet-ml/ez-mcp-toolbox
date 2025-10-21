@@ -700,7 +700,7 @@ def format_assistant_tool_calls(tool_calls: List[Dict[str, Any]]) -> Dict[str, A
 
 
 def process_mcp_tool_result(
-    result: Any, tool_name: str = None, debug: bool = False
+    result: Any, tool_name: Optional[str] = None, debug: bool = False
 ) -> Any:
     """
     Process MCP tool result, preserving structured data.
@@ -856,7 +856,7 @@ def process_mcp_tool_result(
         return str(result)
 
 
-def run_async_in_sync_context(async_func, *args, **kwargs):
+def run_async_in_sync_context(async_func: Any, *args: Any, **kwargs: Any) -> Any:
     """
     Run an async function in a synchronous context using nest_asyncio.
 
@@ -882,7 +882,7 @@ def run_async_in_sync_context(async_func, *args, **kwargs):
     nest_asyncio.apply()
 
     # Create the async function call
-    async def _call_async():
+    async def _call_async() -> Any:
         return await async_func(*args, **kwargs)
 
     # Run the async function
@@ -950,7 +950,9 @@ def resolve_prompt_with_opik(client: Opik, prompt_value: str, console: Console) 
     try:
         console.print(f"🔍 Looking up prompt '{prompt_value}' in Opik...")
         prompt = client.get_prompt(name=prompt_value)
-        prompt_content = prompt.prompt if hasattr(prompt, "prompt") else str(prompt)
+        prompt_content = (
+            prompt.prompt if prompt and hasattr(prompt, "prompt") else str(prompt)
+        )
         if not prompt_content or prompt_content == "None":
             console.print(
                 "⚠️  Prompt found in Opik but content is None/empty/'None', using original prompt value"
@@ -1036,7 +1038,7 @@ def load_metrics_by_names(
 _temp_files: set = set()
 
 
-def _cleanup_temp_files():
+def _cleanup_temp_files() -> None:
     """Clean up all temporary files created during URL downloads."""
     for temp_path in _temp_files.copy():
         try:
