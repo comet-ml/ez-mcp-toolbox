@@ -924,6 +924,29 @@ def init_opik_and_load_dataset(dataset_name: str, console: Console) -> tuple[Opi
 
 def resolve_prompt_with_opik(client: Opik, prompt_value: str, console: Console) -> str:
     """Resolve prompt by name via Opik, falling back to the provided value."""
+    # First check if prompt_value is a filename and load content from file
+    import os
+
+    if os.path.isfile(prompt_value):
+        try:
+            console.print(f"📁 Loading prompt from file: {prompt_value}")
+            with open(prompt_value, "r", encoding="utf-8") as f:
+                file_content = f.read().strip()
+            if file_content:
+                console.print(
+                    f"✅ Loaded prompt from file: {file_content[:100]}{'...' if len(file_content) > 100 else ''}"
+                )
+                return file_content
+            else:
+                console.print(
+                    f"⚠️  File '{prompt_value}' is empty, falling back to Opik lookup"
+                )
+        except Exception as e:
+            console.print(
+                f"⚠️  Error reading file '{prompt_value}': {e}, falling back to Opik lookup"
+            )
+
+    # If not a file or file loading failed, try Opik lookup
     try:
         console.print(f"🔍 Looking up prompt '{prompt_value}' in Opik...")
         prompt = client.get_prompt(name=prompt_value)
