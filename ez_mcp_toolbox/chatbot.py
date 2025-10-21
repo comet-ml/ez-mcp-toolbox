@@ -496,7 +496,7 @@ class MCPChatbot:
     def _create_direct_tool_runner(self) -> Any:
         """Create a helper function to run tools via MCP sessions."""
 
-        def run_tool(tool_identifier: str, **kwargs) -> str:
+        def run_tool(tool_identifier: str, **kwargs: Any) -> str:
             """Helper to run tools - accepts SERVER.TOOL format.
 
             Args:
@@ -529,6 +529,7 @@ class MCPChatbot:
                                     isinstance(content_data, list)
                                     and len(content_data) > 0
                                 ):
+                                    # Type guard for MCP content objects
                                     if (
                                         hasattr(content_data[0], "type")
                                         and content_data[0].type == "text"
@@ -543,14 +544,17 @@ class MCPChatbot:
                                         # Extract text content from list of content items
                                         text_parts = []
                                         for item in content_data:
-                                            if hasattr(item, "text"):
-                                                text_parts.append(item.text)
-                                            elif (
-                                                isinstance(item, dict)
-                                                and "text" in item
-                                            ):  # type: ignore
-                                                text_parts.append(item["text"])
-                                            else:
+                                            try:
+                                                if hasattr(item, "text"):
+                                                    text_parts.append(item.text)
+                                                elif (
+                                                    isinstance(item, dict)
+                                                    and "text" in item
+                                                ):
+                                                    text_parts.append(item["text"])
+                                                else:
+                                                    text_parts.append(str(item))
+                                            except Exception:
                                                 text_parts.append(str(item))
                                         return "".join(text_parts)
                                 else:
@@ -569,7 +573,11 @@ class MCPChatbot:
                     result = run_async_in_sync_context(_call_tool)
                     if self.debug:
                         print(result)
-                    return None
+                    return (
+                        str(result)
+                        if result is not None
+                        else "Tool execution completed"
+                    )
                 except Exception:
                     # Fallback: try to run in a new thread with new event loop
                     import concurrent.futures
@@ -587,7 +595,11 @@ class MCPChatbot:
                         result = future.result()
                         if self.debug:
                             print(result)
-                        return None
+                        return (
+                            str(result)
+                            if result is not None
+                            else "Tool execution completed"
+                        )
 
             except Exception as e:
                 return f"Error executing tool '{tool_identifier}': {e}"
@@ -597,7 +609,7 @@ class MCPChatbot:
     def _create_direct_tool_runner_return(self) -> Any:
         """Create a helper function to run tools via MCP sessions that returns the result."""
 
-        def run_tool_return(tool_identifier: str, **kwargs) -> Any:
+        def run_tool_return(tool_identifier: str, **kwargs: Any) -> Any:
             """Helper to run tools - accepts SERVER.TOOL format and returns the result.
 
             Args:
@@ -633,6 +645,7 @@ class MCPChatbot:
                                     isinstance(content_data, list)
                                     and len(content_data) > 0
                                 ):
+                                    # Type guard for MCP content objects
                                     if (
                                         hasattr(content_data[0], "type")
                                         and content_data[0].type == "text"
@@ -647,14 +660,17 @@ class MCPChatbot:
                                         # Extract text content from list of content items
                                         text_parts = []
                                         for item in content_data:
-                                            if hasattr(item, "text"):
-                                                text_parts.append(item.text)
-                                            elif (
-                                                isinstance(item, dict)
-                                                and "text" in item
-                                            ):  # type: ignore
-                                                text_parts.append(item["text"])
-                                            else:
+                                            try:
+                                                if hasattr(item, "text"):
+                                                    text_parts.append(item.text)
+                                                elif (
+                                                    isinstance(item, dict)
+                                                    and "text" in item
+                                                ):
+                                                    text_parts.append(item["text"])
+                                                else:
+                                                    text_parts.append(str(item))
+                                            except Exception:
                                                 text_parts.append(str(item))
                                         return "".join(text_parts)
                                 else:
@@ -698,7 +714,7 @@ class MCPChatbot:
     def _create_direct_tool_getter(self) -> Any:
         """Create a helper function to get tools via MCP sessions."""
 
-        def get_tools(server_name: Optional[str] = None) -> None:
+        def get_tools(server_name: Optional[str] = None) -> str:
             """Helper to get tools - prints rich formatted list of tools."""
             try:
                 # If no server specified, show all servers and their tools
@@ -710,7 +726,7 @@ class MCPChatbot:
                         self.console.print(
                             "Use `!list_available_tools()` to see connection status."
                         )
-                        return None
+                        return "No MCP servers connected"
 
                     # Create async function to get all tools for all servers
                     async def _get_all_tools_data() -> Any:
@@ -802,7 +818,7 @@ class MCPChatbot:
 
                             self.console.print()
 
-                    return None
+                    return "Tools listed successfully"
 
                 # Check if server exists
                 if server_name not in self.mcp_manager.sessions:
@@ -811,7 +827,7 @@ class MCPChatbot:
                     self.console.print(
                         f"Server '{server_name}' not found. Available servers: {', '.join(available_servers)}"
                     )
-                    return None
+                    return "Tools listed successfully"
 
                 # Create async function to get tools for specific server
                 async def _get_tools_data() -> Any:
@@ -870,19 +886,19 @@ class MCPChatbot:
                 else:
                     self.console.print("[italic]*No tools available*[/italic]")
 
-                return None
+                return "Tools listed successfully"
 
             except Exception as e:
                 self.console.print("[bold red]## Error[/bold red]")
                 self.console.print(f"Error getting tools: {e}")
-                return None
+                return "Tools listed successfully"
 
         return get_tools
 
     def _create_direct_tool_info_getter(self) -> Any:
         """Create a helper function to get detailed tool information via MCP sessions."""
 
-        def get_tool_info(tool_identifier: str) -> None:
+        def get_tool_info(tool_identifier: str) -> str:
             """Helper to get detailed information about a specific tool.
 
             Args:
@@ -963,7 +979,7 @@ class MCPChatbot:
                     result = asyncio.run(_get_tool_info())
                     if self.debug:
                         print(result)
-                    return None
+                    return "Tools listed successfully"
                 except Exception:
                     # Fallback: try to run in a new thread with new event loop
                     import concurrent.futures
@@ -981,7 +997,11 @@ class MCPChatbot:
                         result = future.result()
                         if self.debug:
                             print(result)
-                        return None
+                        return (
+                            str(result)
+                            if result is not None
+                            else "Tool execution completed"
+                        )
 
             except Exception as e:
                 return f"Error getting tool info for '{tool_identifier}': {e}"
@@ -1242,7 +1262,7 @@ class MCPChatbot:
                     self.console.print()  # Add spacing
                     continue
 
-                a = await self.chat(q)
+                a: str = await self.chat(str(q))
 
                 # Display bot response with Rich markdown formatting
                 if a:
@@ -1504,7 +1524,7 @@ class MCPChatbot:
         except Exception as e:
             self.console.print(f"[red]Error executing tool '{tool_command}': {e}[/red]")
 
-    def list_available_tools(self) -> None:
+    def list_available_tools(self) -> str:
         """
         List all available MCP tools that can be executed.
         Returns a list of tool names and descriptions.
@@ -1533,7 +1553,7 @@ class MCPChatbot:
         except Exception as e:
             return f"Error getting tools: {e}"
 
-    def call_session_tool(self, server_name: str, tool_name: str, **kwargs) -> Any:
+    def call_session_tool(self, server_name: str, tool_name: str, **kwargs: Any) -> str:
         """
         Directly call a tool on a specific MCP server session.
         This bypasses the tool call infrastructure for direct execution.
@@ -1682,7 +1702,7 @@ async def main() -> None:
 
     # Resolve system prompt using Opik if available, otherwise use direct value
     console = Console()
-    system_prompt = None
+    system_prompt: str
 
     if args.prompt:
         try:
@@ -1690,7 +1710,10 @@ async def main() -> None:
             from opik import Opik
 
             client = Opik()
-            system_prompt = resolve_prompt_with_opik(client, args.prompt, console)
+            resolved_prompt = resolve_prompt_with_opik(client, args.prompt, console)
+            system_prompt = (
+                resolved_prompt if resolved_prompt is not None else args.prompt
+            )
         except Exception as e:
             # If Opik is not available or fails, use the prompt value directly
             console.print(f"⚠️  Opik not available ({e}), using prompt as direct string")
