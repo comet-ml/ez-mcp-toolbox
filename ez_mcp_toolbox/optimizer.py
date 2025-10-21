@@ -153,7 +153,7 @@ class MCPOptimizer:
 
     # _list_available_metrics_from_module removed
 
-    @track(name="optimization_run", type="optimization")
+    @track(name="optimization_run", type="general")
     async def run_optimization(self) -> Any:
         """Run the optimization using Opik."""
         try:
