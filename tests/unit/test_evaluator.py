@@ -242,6 +242,7 @@ class CustomMetric:
             config.metric = "CustomMetric,Hallucination"  # CustomMetric exists in file, Hallucination should fallback
             config.metrics_file = custom_metrics_file
             config.debug = False
+            config.config_path = "ez-config.json"  # Add proper config_path
 
             # Create evaluator instance
             evaluator = MCPEvaluator(config)
@@ -299,6 +300,7 @@ class CustomMetric:
             config.metric = "NonExistentMetric"  # This metric doesn't exist anywhere
             config.metrics_file = custom_metrics_file
             config.debug = False
+            config.config_path = "ez-config.json"  # Add proper config_path
 
             # Create evaluator instance
             evaluator = MCPEvaluator(config)
@@ -331,6 +333,7 @@ class CustomMetric:
         )
         config.metrics_file = None
         config.debug = False
+        config.config_path = "ez-config.json"  # Add proper config_path
 
         # Create evaluator instance
         evaluator = MCPEvaluator(config)
