@@ -1251,9 +1251,6 @@ async def chat_with_tools(
         assistant_tool_stub = []
 
         for tc in tool_calls:
-            if debug:
-                print(f"🔧 Executing tool: {tc.function.name}")
-
             # Show spinner while executing tool (if console available)
             if console:
                 with console.status(
@@ -1263,12 +1260,6 @@ async def chat_with_tools(
                     tool_result = await mcp_manager.execute_tool_call(tc)
             else:
                 tool_result = await mcp_manager.execute_tool_call(tc)
-
-            if debug:
-                if isinstance(tool_result, str):
-                    print(f"📊 Tool result length: {len(tool_result)} characters")
-                else:
-                    print(f"📊 Tool result type: {type(tool_result)}")
 
             # Build messages to feed back to the model
             assistant_tool_stub.append(
@@ -1284,24 +1275,7 @@ async def chat_with_tools(
             executed_tool_msgs.append(format_tool_result(tc.id, tool_result))
 
         # Add the assistant tool-call stub + tool results to persistent history
-        if debug:
-            print(
-                f"📝 Adding {len(executed_tool_msgs)} tool results to conversation history"
-            )
         messages.append(format_assistant_tool_calls(assistant_tool_stub))
         messages.extend(executed_tool_msgs)
-        if debug:
-            print(f"📊 Total messages in history: {len(messages)}")
-
-        # Debug: Check the last message content
-        if executed_tool_msgs and debug:
-            last_tool_result = executed_tool_msgs[-1]
-            content = last_tool_result.get("content", "")
-            if isinstance(content, str):
-                print(f"🔍 Last tool result preview: {content[:200]}...")
-                print(f"🔍 Last tool result length: {len(content)}")
-            else:
-                print(f"🔍 Last tool result type: {type(content)}")
-                print(f"🔍 Last tool result preview: {str(content)[:200]}...")
 
     return text_reply

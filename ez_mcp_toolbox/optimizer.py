@@ -86,6 +86,7 @@ class MCPOptimizer(MCPChatbot):
         self.config = config
         self.client: Optional[Any] = None
         self.dataset: Optional[Any] = None
+        self._current_chat_prompt: Optional[Any] = None
 
     def configure_opik(self) -> None:
         """Configure Opik based on the specified mode."""
@@ -165,6 +166,9 @@ class MCPOptimizer(MCPChatbot):
     async def run_optimization(self) -> Any:
         """Run the optimization using Opik."""
         try:
+            # Clear messages before optimization to prevent context window overflow
+            self.clear_messages()
+
             self.console.print("🚀 Starting optimization...")
             self.console.print(f"   - Experiment: {self.config.experiment_name}")
             self.console.print(f"   - Dataset: {self.config.dataset}")
@@ -224,6 +228,10 @@ class MCPOptimizer(MCPChatbot):
 
                     def _make_dispatch(name: str):
                         def _tool_dispatch(**kwargs):
+                            if self.config.debug:
+                                self.console.print(
+                                    f"🔍 DEBUG: Tool dispatch called for {name} with kwargs: {kwargs}"
+                                )
                             # Serialize kwargs to JSON string to match expected shape
                             try:
                                 args_json = json.dumps(kwargs)
@@ -236,10 +244,24 @@ class MCPOptimizer(MCPChatbot):
                             # Use synchronous execution that handles async internally
                             # This preserves Opik tracking from execute_tool_call
                             try:
-                                return run_async_in_sync_context(
+                                result = run_async_in_sync_context(
                                     self.mcp_manager.execute_tool_call, tool_call
                                 )
+                                if self.config.debug:
+                                    result_preview = (
+                                        str(result)[:100] + "..."
+                                        if len(str(result)) > 100
+                                        else str(result)
+                                    )
+                                    self.console.print(
+                                        f"🔍 DEBUG: Tool {name} returned: {result_preview}"
+                                    )
+                                return result
                             except Exception as e:
+                                if self.config.debug:
+                                    self.console.print(
+                                        f"🔍 DEBUG: Tool {name} failed: {e}"
+                                    )
                                 return f"Error executing tool '{name}': {e}"
 
                         return _tool_dispatch
@@ -255,13 +277,51 @@ class MCPOptimizer(MCPChatbot):
                 else self.config.input_field
             )
 
-            chat_prompt = ChatPrompt(
+            # Create a custom ChatPrompt subclass that clears messages between uses
+            class ClearableChatPrompt(ChatPrompt):
+                """ChatPrompt subclass that clears messages between uses to prevent context window overflow."""
+
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self._original_system = kwargs.get("system", "")
+                    self._original_user = kwargs.get("user", "")
+                    self._cleared = False
+
+                def get_messages(self, dataset_item=None):
+                    """Override get_messages to clear messages between uses."""
+                    if not self._cleared:
+                        # Clear messages but keep the system prompt
+                        # We need at least one message for the LLM
+                        system_message = {
+                            "role": "system",
+                            "content": self._original_system,
+                        }
+                        self.set_messages([system_message])
+                        self._cleared = True
+
+                    # Call parent method to get messages
+                    return super().get_messages(dataset_item)
+
+                def clear_messages(self):
+                    """Manually clear messages and reset to original state."""
+                    # Keep the system prompt to avoid empty messages error
+                    system_message = {
+                        "role": "system",
+                        "content": self._original_system,
+                    }
+                    self.set_messages([system_message])
+                    self._cleared = True
+
+            chat_prompt = ClearableChatPrompt(
                 system=resolved_prompt,
                 # Use the selected user field as the user template, e.g., "{question}"
                 user="{" + user_field + "}",
                 tools=tools_for_prompt if tools_for_prompt else None,
                 function_map=function_map if function_map else None,
             )
+
+            # Store reference to chat_prompt for message clearing
+            self._current_chat_prompt = chat_prompt
 
             # Create the optimizer instance based on config
             optimizer_class = getattr(
@@ -286,6 +346,14 @@ class MCPOptimizer(MCPChatbot):
             # Wrap the metric in a function matching optimizer's expected signature
             # def optimizer_metric(dataset_item: dict[str, Any], llm_output: str) -> ScoreResult
             def optimizer_metric(dataset_item, llm_output):
+                # Clear messages before each metric evaluation to prevent context window overflow
+                # This is the same approach used in the evaluator
+                self.clear_messages()
+
+                # Also clear the ChatPrompt messages if it has the method
+                if hasattr(chat_prompt, "clear_messages"):
+                    chat_prompt.clear_messages()
+
                 metric_class = primary_metric.__class__
                 metric_instance = metric_class()
                 # Use the configured reference field from the dataset as the reference input to the metric
