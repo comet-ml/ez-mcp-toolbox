@@ -547,6 +547,15 @@ def call_llm_with_tracing(
         call_kwargs = kwargs.copy()
         if tools:
             call_kwargs.update({"tools": tools, "tool_choice": "auto"})
+            if debug:
+                print(f"🔧 Added tools to call_kwargs: {len(tools)} tools")
+                print("🔧 Tool choice: auto")
+        else:
+            if debug:
+                print("⚠️  No tools provided to LLM call")
+
+        if debug:
+            print(f"🔧 Final call_kwargs keys: {list(call_kwargs.keys())}")
 
         resp = completion(
             model=model,
@@ -1134,3 +1143,165 @@ def resolve_tools_file_path(tools_file: str, console: Optional[Console] = None) 
     else:
         # It's a local file path
         return tools_file
+
+
+@track
+async def chat_with_tools(
+    user_text: str,
+    system_prompt: str,
+    model: str,
+    model_kwargs: Dict[str, Any],
+    mcp_manager: Any,
+    messages: List[Dict[str, Any]],
+    max_rounds: int = 4,
+    debug: bool = False,
+    console: Optional[Console] = None,
+    thread_id: Optional[str] = None,
+) -> str:
+    """
+    Shared chat function that handles LLM calls with tool execution.
+
+    This function provides the robust chat logic from chatbot.py that can be
+    reused by both the chatbot and evaluator.
+
+    Args:
+        user_text: The user's input text
+        system_prompt: The system prompt to use
+        model: The LLM model to use
+        model_kwargs: Additional model parameters
+        mcp_manager: The MCP manager instance
+        messages: List of messages for conversation history
+        max_rounds: Maximum number of conversation rounds
+        debug: Whether to enable debug output
+        console: Optional Rich console for output
+        thread_id: Optional thread ID for Opik tracing
+
+    Returns:
+        The final response text
+    """
+    if not mcp_manager.sessions:
+        raise RuntimeError("Not connected to any MCP servers.")
+
+    # Update Opik context with thread_id for conversation grouping
+    if thread_id:
+        try:
+            from opik import opik_context
+
+            opik_context.update_current_trace(thread_id=thread_id)
+        except Exception:
+            # Opik not available, continue without tracing
+            pass
+
+    # 1) Fetch tool catalog from all MCP servers
+    tools = await mcp_manager._get_all_tools()
+
+    # 2) Add user message to persistent history
+    user_msg = {"role": "user", "content": user_text}
+    messages.append(user_msg)
+
+    # 3) Chat loop with tool calling using persistent messages
+    text_reply: str = ""
+
+    for round_num in range(max_rounds):
+        try:
+            if debug:
+                print(f"🔄 LLM call round {round_num + 1}/{max_rounds}")
+
+            # Show spinner while processing (if console available)
+            if console:
+                with console.status(
+                    "[bold green]Thinking...[/bold green]", spinner="dots"
+                ):
+                    # Call LLM with proper span management within the current trace
+                    resp = call_llm_with_tracing(
+                        model=model,
+                        messages=messages,
+                        tools=tools if tools else None,
+                        debug=debug,
+                        console=console,
+                        **model_kwargs,
+                    )
+            else:
+                # Call LLM without spinner
+                resp = call_llm_with_tracing(
+                    model=model,
+                    messages=messages,
+                    tools=tools if tools else None,
+                    debug=debug,
+                    console=console,
+                    **model_kwargs,
+                )
+
+            # Use common utility function to extract content and tool calls
+            content, tool_calls = extract_llm_content(resp, debug)
+
+            if not tool_calls:
+                text_reply = (content or "").strip()
+                # Add assistant's final response to persistent history
+                messages.append({"role": "assistant", "content": text_reply})
+                break
+        except Exception as e:
+            if debug:
+                print(f"❌ LLM call failed in round {round_num + 1}: {e}")
+            text_reply = f"Error in LLM call: {e}"
+            break
+
+        # 4) Execute each requested tool via MCP
+        executed_tool_msgs: List[Dict[str, Any]] = []
+        assistant_tool_stub = []
+
+        for tc in tool_calls:
+            if debug:
+                print(f"🔧 Executing tool: {tc.function.name}")
+
+            # Show spinner while executing tool (if console available)
+            if console:
+                with console.status(
+                    f"[bold blue]Executing {tc.function.name}...[/bold blue]",
+                    spinner="dots",
+                ):
+                    tool_result = await mcp_manager.execute_tool_call(tc)
+            else:
+                tool_result = await mcp_manager.execute_tool_call(tc)
+
+            if debug:
+                if isinstance(tool_result, str):
+                    print(f"📊 Tool result length: {len(tool_result)} characters")
+                else:
+                    print(f"📊 Tool result type: {type(tool_result)}")
+
+            # Build messages to feed back to the model
+            assistant_tool_stub.append(
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments or "{}",
+                    },
+                }
+            )
+            executed_tool_msgs.append(format_tool_result(tc.id, tool_result))
+
+        # Add the assistant tool-call stub + tool results to persistent history
+        if debug:
+            print(
+                f"📝 Adding {len(executed_tool_msgs)} tool results to conversation history"
+            )
+        messages.append(format_assistant_tool_calls(assistant_tool_stub))
+        messages.extend(executed_tool_msgs)
+        if debug:
+            print(f"📊 Total messages in history: {len(messages)}")
+
+        # Debug: Check the last message content
+        if executed_tool_msgs and debug:
+            last_tool_result = executed_tool_msgs[-1]
+            content = last_tool_result.get("content", "")
+            if isinstance(content, str):
+                print(f"🔍 Last tool result preview: {content[:200]}...")
+                print(f"🔍 Last tool result length: {len(content)}")
+            else:
+                print(f"🔍 Last tool result type: {type(content)}")
+                print(f"🔍 Last tool result preview: {str(content)[:200]}...")
+
+    return text_reply

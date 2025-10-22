@@ -27,7 +27,7 @@ from .utils import (
     resolve_prompt_with_opik,
     load_metrics_by_names,
 )
-from .mcp_utils import MCPManager, ServerConfig
+from .chatbot import MCPChatbot
 
 # Suppress litellm RuntimeWarning about coroutines never awaited
 warnings.filterwarnings(
@@ -68,16 +68,24 @@ class EvaluationConfig:
     optimize_kwargs: Optional[Dict[str, Any]] = None
 
 
-class MCPOptimizer:
+class MCPOptimizer(MCPChatbot):
     """Main optimizer class for running Opik optimizations."""
 
     def __init__(self, config: EvaluationConfig):
+        # Initialize the chatbot with the optimization config parameters
+        super().__init__(
+            config_path=config.config_path or "ez-config.json",
+            system_prompt=config.prompt,
+            model_override=config.model,
+            model_args_override=config.model_kwargs,
+            tools_file=config.tools_file,
+            debug=config.debug,
+        )
+
+        # Store the optimization-specific config
         self.config = config
-        self.console = Console()
         self.client: Optional[Any] = None
         self.dataset: Optional[Any] = None
-        self.mcp_manager = MCPManager(console=self.console, debug=config.debug)
-        self._preloaded_tools: Optional[List[Dict[str, Any]]] = None
 
     def configure_opik(self) -> None:
         """Configure Opik based on the specified mode."""
@@ -344,61 +352,29 @@ class MCPOptimizer:
             # Configure Opik
             self.configure_opik()
 
-            # Load MCP configuration if provided
-            if self.config.tools_file:
-                # Resolve tools file path (download from URL if necessary)
-                from .utils import resolve_tools_file_path
+            # Connect to MCP servers using the inherited chatbot method
+            self.console.print("🔧 Connecting to MCP servers...")
+            await self.connect_all_servers()
 
-                resolved_tools_file = resolve_tools_file_path(
-                    self.config.tools_file, self.console
-                )
-
-                # Create dynamic MCP server configuration using tools file
-                servers = [
-                    ServerConfig(
-                        name="ez-mcp-server",
-                        description="Ez MCP server for tool discovery and execution",
-                        command="ez-mcp-server",
-                        args=[resolved_tools_file],
-                    )
-                ]
-                self.console.print(
-                    f"📡 Created MCP server configuration with tools file: {resolved_tools_file}"
-                )
-                await self.mcp_manager.connect_all_servers(servers)
-            elif self.config.config_path:
-                servers = self.mcp_manager.load_mcp_config(self.config.config_path)
-                if servers:
-                    self.console.print(f"📡 Loaded {len(servers)} MCP server(s)")
-                    await self.mcp_manager.connect_all_servers(servers)
-                else:
-                    self.console.print("⚠️  No MCP servers configured")
-
-            # Pre-load tools after MCP connections are established
             if self.mcp_manager.sessions:
-                self.console.print("🔧 Loading tools for optimization...")
-                try:
-                    tools = await self.mcp_manager._get_all_tools()
-                    if tools:
-                        self.console.print(
-                            f"✅ Successfully loaded {len(tools)} tools for optimization"
-                        )
-                        # Store tools for use in optimization
-                        self._preloaded_tools = tools
-                    else:
-                        self.console.print(
-                            "⚠️  No tools returned from MCP server - continuing without tools"
-                        )
-                        self._preloaded_tools = None
-                except Exception as e:
-                    self.console.print(f"⚠️  Failed to load tools: {e}")
-                    self.console.print("⚠️  Continuing without tools")
-                    self._preloaded_tools = None
-            else:
                 self.console.print(
-                    "⚠️  No MCP servers configured - continuing without tools"
+                    "✅ MCP connections established - tools will be loaded by MCPChatbot"
                 )
-                self._preloaded_tools = None
+                # Get tools for optimization
+                tools = await self.mcp_manager._get_all_tools()
+                if tools:
+                    self.console.print(
+                        f"✅ Successfully loaded {len(tools)} tools for optimization"
+                    )
+                    self._preloaded_tools = tools
+                else:
+                    self.console.print(
+                        "⚠️  No tools returned from MCP server - continuing without tools"
+                    )
+                    self._preloaded_tools = []
+            else:
+                self.console.print("❌ No MCP connections available")
+                raise RuntimeError("No MCP connections available")
 
             # Setup client and dataset
             self.setup_client_and_dataset()

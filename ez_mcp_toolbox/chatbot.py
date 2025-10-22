@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
-from opik import track, opik_context
+from opik import track
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.completion import Completer, Completion
@@ -21,10 +21,8 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from .utils import (
     configure_opik as configure_opik_util,
     call_llm_with_tracing,
-    extract_llm_content,
-    format_tool_result,
-    format_assistant_tool_calls,
     resolve_prompt_with_opik,
+    chat_with_tools,
 )
 from .mcp_utils import MCPManager
 
@@ -1029,114 +1027,19 @@ class MCPChatbot:
 
     @track
     async def chat(self, user_text: str) -> str:
-        if not self.mcp_manager.sessions:
-            raise RuntimeError("Not connected to any MCP servers.")
-
-        # Update Opik context with thread_id for conversation grouping
-        try:
-            opik_context.update_current_trace(thread_id=self.thread_id)
-        except Exception:
-            # Opik not available, continue without tracing
-            pass
-
-        # 1) Fetch tool catalog from all MCP servers
-        tools = await self.mcp_manager._get_all_tools()
-
-        # 2) Add user message to persistent history
-        user_msg = {"role": "user", "content": user_text}
-        self.messages.append(user_msg)
-
-        # 3) Chat loop with tool calling using persistent messages
-        text_reply: str = ""
-
-        max_rounds = self.max_rounds or 4
-        for round_num in range(max_rounds):
-            try:
-                if self.debug:
-                    print(f"🔄 LLM call round {round_num + 1}/{self.max_rounds}")
-
-                # Show spinner while processing
-                with self.console.status(
-                    "[bold green]Thinking...[/bold green]", spinner="dots"
-                ):
-                    # Call LLM with proper span management within the current trace
-                    resp = await self._call_llm_with_span(
-                        model=self.model,
-                        messages=self.messages,
-                        tools=tools if tools else None,
-                        **self.model_kwargs,
-                    )
-
-                # Use common utility function to extract content and tool calls
-                content, tool_calls = extract_llm_content(resp, self.debug)
-
-                if not tool_calls:
-                    text_reply = (content or "").strip()
-                    # Add assistant's final response to persistent history
-                    self.messages.append({"role": "assistant", "content": text_reply})
-                    break
-            except Exception as e:
-                if self.debug:
-                    print(f"❌ LLM call failed in round {round_num + 1}: {e}")
-                text_reply = f"Error in LLM call: {e}"
-                break
-
-            # 4) Execute each requested tool via MCP
-            executed_tool_msgs: List[Dict[str, Any]] = []
-            assistant_tool_stub = []
-
-            for tc in tool_calls:
-                if self.debug:
-                    print(f"🔧 Executing tool: {tc.function.name}")
-
-                # Show spinner while executing tool
-                with self.console.status(
-                    f"[bold blue]Executing {tc.function.name}...[/bold blue]",
-                    spinner="dots",
-                ):
-                    tool_result = await self.mcp_manager.execute_tool_call(tc)
-
-                if self.debug:
-                    if isinstance(tool_result, str):
-                        print(f"📊 Tool result length: {len(tool_result)} characters")
-                    else:
-                        print(f"📊 Tool result type: {type(tool_result)}")
-
-                # Build messages to feed back to the model
-                assistant_tool_stub.append(
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments or "{}",
-                        },
-                    }
-                )
-                executed_tool_msgs.append(format_tool_result(tc.id, tool_result))
-
-            # Add the assistant tool-call stub + tool results to persistent history
-            if self.debug:
-                print(
-                    f"📝 Adding {len(executed_tool_msgs)} tool results to conversation history"
-                )
-            self.messages.append(format_assistant_tool_calls(assistant_tool_stub))
-            self.messages.extend(executed_tool_msgs)
-            if self.debug:
-                print(f"📊 Total messages in history: {len(self.messages)}")
-
-            # Debug: Check the last message content
-            if executed_tool_msgs and self.debug:
-                last_tool_result = executed_tool_msgs[-1]
-                content = last_tool_result.get("content", "")
-                if isinstance(content, str):
-                    print(f"🔍 Last tool result preview: {content[:200]}...")
-                    print(f"🔍 Last tool result length: {len(content)}")
-                else:
-                    print(f"🔍 Last tool result type: {type(content)}")
-                    print(f"🔍 Last tool result preview: {str(content)[:200]}...")
-
-        return text_reply
+        """Chat method that delegates to the shared chat_with_tools function."""
+        return await chat_with_tools(
+            user_text=user_text,
+            system_prompt=self.system_prompt,
+            model=self.model,
+            model_kwargs=self.model_kwargs,
+            mcp_manager=self.mcp_manager,
+            messages=self.messages,
+            max_rounds=self.max_rounds or 4,
+            debug=self.debug,
+            console=self.console,
+            thread_id=self.thread_id,
+        )
 
     def clear_messages(self) -> None:
         """Clear the message history, keeping only the system prompt."""

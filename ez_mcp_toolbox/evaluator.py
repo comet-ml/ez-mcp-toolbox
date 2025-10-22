@@ -22,15 +22,12 @@ from dotenv import load_dotenv
 
 from .utils import (
     configure_opik,
-    call_llm_with_tracing,
-    extract_llm_content,
-    format_tool_result,
-    format_assistant_tool_calls,
     init_opik_and_load_dataset,
     resolve_prompt_with_opik,
     load_metrics_by_names,
 )
-from .mcp_utils import MCPManager, ServerConfig
+from .mcp_utils import ServerConfig
+from .chatbot import MCPChatbot
 
 # Suppress litellm RuntimeWarning about coroutines never awaited
 warnings.filterwarnings(
@@ -67,16 +64,24 @@ class EvaluationConfig:
     num: Optional[int] = None
 
 
-class MCPEvaluator:
+class MCPEvaluator(MCPChatbot):
     """Main evaluator class for running Opik evaluations."""
 
     def __init__(self, config: EvaluationConfig):
+        # Initialize the chatbot with the evaluation config parameters
+        super().__init__(
+            config_path=config.config_path or "ez-config.json",
+            system_prompt=config.prompt,
+            model_override=config.model,
+            model_args_override=config.model_kwargs,
+            tools_file=config.tools_file,
+            debug=config.debug,
+        )
+
+        # Store the evaluation-specific config
         self.config = config
-        self.console = Console()
         self.client: Optional[Any] = None
         self.dataset: Optional[Any] = None
-        self.mcp_manager = MCPManager(console=self.console, debug=config.debug)
-        self._preloaded_tools: Optional[List[Dict[str, Any]]] = None
 
     def configure_opik(self) -> None:
         """Configure Opik based on the specified mode."""
@@ -119,9 +124,6 @@ class MCPEvaluator:
     def create_evaluation_task(self, resolved_prompt: str) -> Any:
         """Create the evaluation task function with pre-loaded tools."""
 
-        # Use pre-loaded tools from the run method
-        tools = getattr(self, "_preloaded_tools", None)
-
         def evaluation_task(dataset_item: Any) -> Dict[str, Any]:
             """Synchronous evaluation task that will be called for each dataset item."""
             try:
@@ -131,100 +133,36 @@ class MCPEvaluator:
                 # Get the input value from the dataset
                 input_value = dataset_item.get(self.config.input_field)
 
-                # Call the LLM with the resolved prompt and input, including tools
+                # Tools are now handled by the inherited MCPChatbot class
+                if self.config.debug:
+                    self.console.print("🔧 Using MCPChatbot's tool handling")
+
+                # Use the inherited chat method from MCPChatbot in quiet mode
                 try:
-                    # Use common utility function for LLM calls with Opik tracing
-                    resp = call_llm_with_tracing(
-                        model=self.config.model,
-                        messages=[
-                            {"role": "system", "content": resolved_prompt},
-                            {"role": "user", "content": str(input_value)},
-                        ],
-                        tools=tools,
-                        debug=self.config.debug,
-                        console=self.console,
-                        **self.config.model_kwargs if self.config.model_kwargs else {},
-                    )
+                    # Clear any existing messages and set the system prompt
+                    self.messages = [{"role": "system", "content": resolved_prompt}]
 
-                    # Extract content and tool calls
-                    content, tool_calls = extract_llm_content(resp, self.config.debug)
+                    # Temporarily disable debug output and console for quiet evaluation
+                    original_debug = self.debug
+                    original_console = self.console
+                    original_mcp_debug = self.mcp_manager.debug
+                    self.debug = False
+                    self.console = None  # Disable console output
+                    self.mcp_manager.debug = False  # Disable MCP debug output
 
-                    # If there are tool calls, execute them using a robust async/sync approach
-                    if tool_calls:
-                        if self.config.debug:
-                            self.console.print(
-                                f"🔧 Executing {len(tool_calls)} tool calls"
-                            )
+                    # Run the async chat method in a sync context
+                    import asyncio
 
-                        # Execute each tool call using a robust thread-based approach
-                        tool_results = []
-                        for tool_call in tool_calls:
-                            if self.config.debug:
-                                self.console.print(
-                                    f"🔧 Executing tool: {tool_call.function.name}"
-                                )
+                    response = asyncio.run(self.chat(str(input_value)))
 
-                            # Execute tool call using common async/sync utility
-                            try:
-                                from .utils import run_async_in_sync_context
-
-                                tool_result = run_async_in_sync_context(
-                                    self.mcp_manager.execute_tool_call, tool_call
-                                )
-                                tool_results.append(
-                                    format_tool_result(tool_call.id, tool_result)
-                                )
-                            except Exception as e:
-                                self.console.print(
-                                    f"⚠️  Error executing tool {tool_call.function.name}: {e}"
-                                )
-                                tool_result = f"Tool execution error: {e}"
-                                tool_results.append(
-                                    format_tool_result(tool_call.id, tool_result)
-                                )
-
-                        # Make another LLM call with tool results
-                        messages = [
-                            {"role": "system", "content": resolved_prompt},
-                            {"role": "user", "content": str(input_value)},
-                            format_assistant_tool_calls(
-                                [
-                                    {
-                                        "id": tc.id,
-                                        "type": "function",
-                                        "function": {
-                                            "name": tc.function.name,
-                                            "arguments": tc.function.arguments or "{}",
-                                        },
-                                    }
-                                    for tc in tool_calls
-                                ]
-                            ),
-                        ]
-                        messages.extend(tool_results)
-
-                        # Final LLM call with tool results
-                        final_resp = call_llm_with_tracing(
-                            model=self.config.model,
-                            messages=messages,
-                            debug=self.config.debug,
-                            console=self.console,
-                            **(
-                                self.config.model_kwargs
-                                if self.config.model_kwargs
-                                else {}
-                            ),
-                        )
-                        final_content, _ = extract_llm_content(
-                            final_resp, self.config.debug
-                        )
-                        response = final_content or content or ""
-                    else:
-                        response = content or ""
+                    # Restore original settings
+                    self.debug = original_debug
+                    self.console = original_console
+                    self.mcp_manager.debug = original_mcp_debug
 
                 except Exception as llm_error:
-                    self.console.print(f"⚠️  LLM call failed: {llm_error}")
-                    response = f"LLM Error: {llm_error}"
+                    self.console.print(f"⚠️  Chat with tools failed: {llm_error}")
+                    response = f"Chat Error: {llm_error}"
 
                 if self.config.debug:
                     self.console.print(f"📝 Generated response: {response}")
@@ -293,15 +231,22 @@ class MCPEvaluator:
             self.console.print("🔄 Running evaluation...")
 
             # Use synchronous evaluation task with single threading to avoid async/sync conflicts
+            scoring_key_mapping = {
+                "output": "llm_output",  # metric parameter "output" -> task output "llm_output"
+                self.config.output_ref: self.config.reference_field,  # metric parameter "reference" -> dataset field "output"
+            }
+
+            if self.config.debug:
+                self.console.print(f"🔍 Scoring key mapping: {scoring_key_mapping}")
+                self.console.print(f"   output_ref: {self.config.output_ref}")
+                self.console.print(f"   reference_field: {self.config.reference_field}")
+
             eval_kwargs = {
                 "experiment_name": self.config.experiment_name,
                 "dataset": self.dataset,
                 "task": evaluation_task,
                 "scoring_metrics": metrics,
-                "scoring_key_mapping": {
-                    "output": "llm_output",  # maps to task output
-                    self.config.output_ref: self.config.reference_field,  # maps to dataset's reference field
-                },
+                "scoring_key_mapping": scoring_key_mapping,
                 "task_threads": 1,  # Disable multi-threading to avoid async/sync conflicts
             }
 
@@ -383,28 +328,17 @@ class MCPEvaluator:
                 else:
                     self.console.print("⚠️  No MCP servers configured")
 
-            # Pre-load tools after MCP connections are established
+            # Connect to MCP servers using the inherited chatbot method
+            self.console.print("🔧 Connecting to MCP servers...")
+            await self.connect_all_servers()
+
             if self.mcp_manager.sessions:
-                self.console.print("🔧 Loading tools for evaluation...")
-                try:
-                    tools = await self.mcp_manager._get_all_tools()
-                    if tools:
-                        self.console.print(
-                            f"✅ Successfully loaded {len(tools)} tools for evaluation"
-                        )
-                        # Store tools for use in evaluation
-                        self._preloaded_tools = tools
-                    else:
-                        self.console.print("❌ No tools returned from MCP server")
-                        raise RuntimeError("No tools returned from MCP server")
-                except Exception as e:
-                    self.console.print(f"❌ Failed to load tools: {e}")
-                    self.console.print(
-                        "❌ Cannot proceed with evaluation without tools"
-                    )
-                    raise RuntimeError(f"Tool loading failed: {e}") from e
+                self.console.print(
+                    "✅ MCP connections established - tools will be loaded by MCPChatbot"
+                )
             else:
-                self._preloaded_tools = None
+                self.console.print("❌ No MCP connections available")
+                raise RuntimeError("No MCP connections available")
 
             # Setup client and dataset
             self.setup_client_and_dataset()
@@ -441,7 +375,7 @@ class MCPEvaluator:
                     f"⚠️  Error cleaning up LiteLLM clients: {cleanup_error}"
                 )
 
-            # Wait for any remaining async tasks to complete
+            # Simplified cleanup - just close MCP connections and let the rest handle itself
             try:
                 # Get current event loop
                 loop = asyncio.get_running_loop()
@@ -451,62 +385,19 @@ class MCPEvaluator:
                 ]
                 if pending_tasks:
                     self.console.print(
-                        f"⏳ Waiting for {len(pending_tasks)} pending tasks to complete..."
+                        f"⏳ Found {len(pending_tasks)} pending tasks, cancelling non-essential ones..."
                     )
 
-                    # Filter out LiteLLM service logging tasks specifically
-                    litellm_tasks = [
-                        task
-                        for task in pending_tasks
-                        if hasattr(task, "_coro")
-                        and "ServiceLogging" in str(task._coro)
-                    ]
-                    other_tasks = [
-                        task for task in pending_tasks if task not in litellm_tasks
-                    ]
-
-                    if litellm_tasks:
-                        self.console.print(
-                            f"🔧 Found {len(litellm_tasks)} LiteLLM service logging tasks"
-                        )
-                        # Cancel LiteLLM tasks immediately as they're not critical
-                        for task in litellm_tasks:
+                    # Cancel all tasks except the current one to avoid hanging
+                    current_task = asyncio.current_task(loop)
+                    for task in pending_tasks:
+                        if task != current_task:
                             try:
                                 task.cancel()
                             except Exception:
                                 pass
 
-                    # Only wait for non-LiteLLM tasks
-                    if other_tasks:
-                        try:
-                            # Use a more robust approach to avoid recursion
-                            done, pending = await asyncio.wait(
-                                other_tasks,
-                                timeout=2.0,
-                                return_when=asyncio.ALL_COMPLETED,
-                            )
-                            if pending:
-                                self.console.print(
-                                    f"⚠️  {len(pending)} tasks did not complete within timeout, cancelling..."
-                                )
-                                # Cancel remaining tasks safely to avoid recursion
-                                for task in pending:
-                                    try:
-                                        task.cancel()
-                                    except Exception:
-                                        # Ignore cancellation errors to prevent recursion
-                                        pass
-                        except Exception as wait_error:
-                            self.console.print(
-                                f"⚠️  Error waiting for tasks: {wait_error}"
-                            )
-                            # Cancel all tasks if there's an error
-                            for task in other_tasks:
-                                if not task.done():
-                                    try:
-                                        task.cancel()
-                                    except Exception:
-                                        pass
+                    self.console.print("✅ Cleanup completed")
             except Exception as cleanup_error:
                 self.console.print(f"⚠️  Error during task cleanup: {cleanup_error}")
 
@@ -924,75 +815,20 @@ def main() -> None:
             except Exception as cleanup_error:
                 print(f"⚠️  Error cleaning up LiteLLM clients: {cleanup_error}")
 
-            # Wait for all pending tasks to complete before closing the loop
+            # Simplified cleanup - just cancel remaining tasks and close loop
             try:
                 # Get all pending tasks
                 pending_tasks = [
                     task for task in asyncio.all_tasks(loop) if not task.done()
                 ]
                 if pending_tasks:
-                    print(
-                        f"⏳ Waiting for {len(pending_tasks)} pending tasks to complete..."
-                    )
-
-                    # Filter out LiteLLM service logging tasks specifically
-                    litellm_tasks = [
-                        task
-                        for task in pending_tasks
-                        if hasattr(task, "_coro")
-                        and "ServiceLogging" in str(task._coro)
-                    ]
-                    other_tasks = [
-                        task for task in pending_tasks if task not in litellm_tasks
-                    ]
-
-                    if litellm_tasks:
-                        print(
-                            f"🔧 Found {len(litellm_tasks)} LiteLLM service logging tasks"
-                        )
-                        # Cancel LiteLLM tasks immediately as they're not critical
-                        for task in litellm_tasks:
-                            try:
-                                task.cancel()
-                            except Exception:
-                                pass
-
-                    # Only wait for non-LiteLLM tasks
-                    if other_tasks:
-
-                        async def wait_for_tasks():
-                            try:
-                                # Use a more robust approach to avoid recursion
-                                done, pending = await asyncio.wait(
-                                    other_tasks,
-                                    timeout=2.0,
-                                    return_when=asyncio.ALL_COMPLETED,
-                                )
-                                if pending:
-                                    print(
-                                        f"⚠️  {len(pending)} tasks did not complete within timeout, cancelling..."
-                                    )
-                                    # Cancel remaining tasks safely to avoid recursion
-                                    for task in pending:
-                                        try:
-                                            task.cancel()
-                                        except Exception:
-                                            # Ignore cancellation errors to prevent recursion
-                                            pass
-                            except Exception as wait_error:
-                                print(f"⚠️  Error waiting for tasks: {wait_error}")
-                                # Cancel all tasks if there's an error
-                                for task in other_tasks:
-                                    if not task.done():
-                                        try:
-                                            task.cancel()
-                                        except Exception:
-                                            pass
-
+                    print(f"⏳ Found {len(pending_tasks)} pending tasks, cancelling...")
+                    for task in pending_tasks:
                         try:
-                            loop.run_until_complete(wait_for_tasks())
-                        except Exception as wait_error:
-                            print(f"⚠️  Error in task cleanup: {wait_error}")
+                            task.cancel()
+                        except Exception:
+                            pass
+                    print("✅ Cleanup completed")
             except Exception as e:
                 print(f"⚠️  Error during task cleanup: {e}")
             finally:
@@ -1028,7 +864,7 @@ def main() -> None:
                 except Exception as cleanup_error:
                     print(f"⚠️  Error cleaning up LiteLLM clients: {cleanup_error}")
 
-                # Wait for all pending tasks to complete before closing the loop
+                # Simplified cleanup - just cancel remaining tasks and close loop
                 try:
                     # Get all pending tasks
                     pending_tasks = [
@@ -1036,67 +872,14 @@ def main() -> None:
                     ]
                     if pending_tasks:
                         print(
-                            f"⏳ Waiting for {len(pending_tasks)} pending tasks to complete..."
+                            f"⏳ Found {len(pending_tasks)} pending tasks, cancelling..."
                         )
-
-                        # Filter out LiteLLM service logging tasks specifically
-                        litellm_tasks = [
-                            task
-                            for task in pending_tasks
-                            if hasattr(task, "_coro")
-                            and "ServiceLogging" in str(task._coro)
-                        ]
-                        other_tasks = [
-                            task for task in pending_tasks if task not in litellm_tasks
-                        ]
-
-                        if litellm_tasks:
-                            print(
-                                f"🔧 Found {len(litellm_tasks)} LiteLLM service logging tasks"
-                            )
-                            # Cancel LiteLLM tasks immediately as they're not critical
-                            for task in litellm_tasks:
-                                try:
-                                    task.cancel()
-                                except Exception:
-                                    pass
-
-                        # Only wait for non-LiteLLM tasks
-                        if other_tasks:
-
-                            async def wait_for_tasks():
-                                try:
-                                    # Use a more robust approach to avoid recursion
-                                    done, pending = await asyncio.wait(
-                                        other_tasks,
-                                        timeout=2.0,
-                                        return_when=asyncio.ALL_COMPLETED,
-                                    )
-                                    if pending:
-                                        print(
-                                            f"⚠️  {len(pending)} tasks did not complete within timeout, cancelling..."
-                                        )
-                                        # Cancel remaining tasks safely to avoid recursion
-                                        for task in pending:
-                                            try:
-                                                task.cancel()
-                                            except Exception:
-                                                # Ignore cancellation errors to prevent recursion
-                                                pass
-                                except Exception as wait_error:
-                                    print(f"⚠️  Error waiting for tasks: {wait_error}")
-                                    # Cancel all tasks if there's an error
-                                    for task in other_tasks:
-                                        if not task.done():
-                                            try:
-                                                task.cancel()
-                                            except Exception:
-                                                pass
-
+                        for task in pending_tasks:
                             try:
-                                new_loop.run_until_complete(wait_for_tasks())
-                            except Exception as wait_error:
-                                print(f"⚠️  Error in task cleanup: {wait_error}")
+                                task.cancel()
+                            except Exception:
+                                pass
+                        print("✅ Cleanup completed")
                 except Exception as e:
                     print(f"⚠️  Error during task cleanup: {e}")
                 finally:
