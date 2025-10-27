@@ -136,8 +136,12 @@ class MCPOptimizer(MCPChatbot):
             )
             raise
 
-    def resolve_prompt(self, prompt_value: str) -> str:
-        """Resolve prompt by first checking Opik for a prompt with that name, then fallback to direct value."""
+    def resolve_prompt(self, prompt_value: str) -> tuple[str, Optional[str]]:
+        """Resolve prompt by first checking Opik for a prompt with that name, then fallback to direct value.
+
+        Returns:
+            tuple: (prompt_content, prompt_id) where prompt_id is None if not found in Opik
+        """
         try:
             if self.client is None:
                 raise RuntimeError("Opik client not initialized")
@@ -148,7 +152,7 @@ class MCPOptimizer(MCPChatbot):
             self.console.print(
                 f"⚠️  Prompt '{prompt_value}' not found in Opik ({e}), using as direct prompt"
             )
-            return prompt_value
+            return prompt_value, None
 
     # evaluation task no longer used; removed
 
@@ -175,13 +179,15 @@ class MCPOptimizer(MCPChatbot):
             self.console.print(f"   - Metric: {self.config.metric}")
 
             # Resolve the prompt and show it
-            resolved_prompt = self.resolve_prompt(self.config.prompt)
+            resolved_prompt, prompt_id = self.resolve_prompt(self.config.prompt)
             prompt_display = (
                 resolved_prompt[:100] + "..."
                 if len(resolved_prompt) > 100
                 else resolved_prompt
             )
             self.console.print(f"   - Prompt: {prompt_display}")
+            if prompt_id:
+                self.console.print(f"   - Prompt ID: {prompt_id}")
 
             # Get metrics for optimization
             metrics = self.get_metrics()
@@ -404,13 +410,15 @@ class MCPOptimizer(MCPChatbot):
         self.console.print(f"🎯 Metric: {self.config.metric}")
 
         # Show the resolved prompt (truncated if too long)
-        resolved_prompt = self.resolve_prompt(self.config.prompt)
+        resolved_prompt, prompt_id = self.resolve_prompt(self.config.prompt)
         prompt_display = (
             resolved_prompt[:100] + "..."
             if len(resolved_prompt) > 100
             else resolved_prompt
         )
         self.console.print(f"💬 Prompt: {prompt_display}")
+        if prompt_id:
+            self.console.print(f"📋 Prompt ID: {prompt_id}")
 
         self.console.print("\n✅ Optimization completed successfully!")
 

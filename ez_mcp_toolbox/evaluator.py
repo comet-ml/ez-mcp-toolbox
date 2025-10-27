@@ -50,7 +50,8 @@ class EvaluationConfig:
     dataset: str
     metric: str
     metrics_file: Optional[str] = None
-    experiment_name: str = "ez-mcp-evaluation"
+    experiment_name: str = "ez-mcp-evaluation-experiment"
+    project_name: str = "ez-mcp-evaluation-project"
     opik_mode: str = "hosted"
     debug: bool = False
     input_field: str = "input"
@@ -85,7 +86,7 @@ class MCPEvaluator(MCPChatbot):
 
     def configure_opik(self) -> None:
         """Configure Opik based on the specified mode."""
-        configure_opik(self.config.opik_mode, "ez-mcp-eval")
+        configure_opik(self.config.opik_mode, self.config.project_name)
 
     def setup_client_and_dataset(self) -> None:
         """Initialize Opik client and load dataset."""
@@ -107,8 +108,12 @@ class MCPEvaluator(MCPChatbot):
             )
             raise
 
-    def resolve_prompt(self, prompt_value: str) -> str:
-        """Resolve prompt by first checking Opik for a prompt with that name, then fallback to direct value."""
+    def resolve_prompt(self, prompt_value: str) -> tuple[str, Optional[str]]:
+        """Resolve prompt by first checking Opik for a prompt with that name, then fallback to direct value.
+
+        Returns:
+            tuple: (prompt_content, prompt_id) where prompt_id is None if not found in Opik
+        """
         try:
             if self.client is None:
                 raise RuntimeError("Opik client not initialized")
@@ -119,7 +124,7 @@ class MCPEvaluator(MCPChatbot):
             self.console.print(
                 f"⚠️  Prompt '{prompt_value}' not found in Opik ({e}), using as direct prompt"
             )
-            return prompt_value
+            return prompt_value, None
 
     def create_evaluation_task(self, resolved_prompt: str) -> Any:
         """Create the evaluation task function with pre-loaded tools."""
@@ -196,17 +201,20 @@ class MCPEvaluator(MCPChatbot):
         try:
             self.console.print("🚀 Starting evaluation...")
             self.console.print(f"   - Experiment: {self.config.experiment_name}")
+            self.console.print(f"   - Project: {self.config.project_name}")
             self.console.print(f"   - Dataset: {self.config.dataset}")
             self.console.print(f"   - Metric: {self.config.metric}")
 
             # Resolve the prompt and show it
-            resolved_prompt = self.resolve_prompt(self.config.prompt)
+            resolved_prompt, prompt_id = self.resolve_prompt(self.config.prompt)
             prompt_display = (
                 resolved_prompt[:100] + "..."
                 if len(resolved_prompt) > 100
                 else resolved_prompt
             )
             self.console.print(f"   - Prompt: {prompt_display}")
+            if prompt_id:
+                self.console.print(f"   - Prompt ID: {prompt_id}")
 
             # Validate input and output fields before proceeding
             self.console.print("🔍 Validating input and output fields...")
@@ -278,17 +286,20 @@ class MCPEvaluator(MCPChatbot):
 
         # Show evaluation information
         self.console.print(f"📈 Experiment: {self.config.experiment_name}")
+        self.console.print(f"📈 Project: {self.config.project_name}")
         self.console.print(f"📊 Dataset: {self.config.dataset}")
         self.console.print(f"🎯 Metric: {self.config.metric}")
 
         # Show the resolved prompt (truncated if too long)
-        resolved_prompt = self.resolve_prompt(self.config.prompt)
+        resolved_prompt, prompt_id = self.resolve_prompt(self.config.prompt)
         prompt_display = (
             resolved_prompt[:100] + "..."
             if len(resolved_prompt) > 100
             else resolved_prompt
         )
         self.console.print(f"💬 Prompt: {prompt_display}")
+        if prompt_id:
+            self.console.print(f"📋 Prompt ID: {prompt_id}")
 
         self.console.print("\n✅ Evaluation completed successfully!")
 
@@ -438,8 +449,14 @@ Examples:
 
     parser.add_argument(
         "--experiment-name",
-        default="ez-mcp-evaluation",
-        help="Name for the evaluation experiment (default: ez-mcp-evaluation)",
+        default="ez-mcp-evaluation-experiment",
+        help="Name for the evaluation experiment (default: ez-mcp-evaluation-experiment)",
+    )
+
+    parser.add_argument(
+        "--project-name",
+        default="ez-mcp-evaluation-project",
+        help="Name for the evaluation project (default: ez-mcp-evaluation-project)",
     )
 
     parser.add_argument(
@@ -767,6 +784,7 @@ def main() -> None:
         metric=args.metric,
         metrics_file=args.metrics_file,
         experiment_name=args.experiment_name,
+        project_name=args.project_name,
         opik_mode=args.opik,
         debug=args.debug,
         input_field=input_field,

@@ -245,10 +245,12 @@ class MCPChatbot:
         model_override: Optional[str] = None,
         model_args_override: Optional[Dict[str, Any]] = None,
         tools_file: Optional[str] = None,
+        prompt_id: Optional[str] = None,
     ) -> None:
         self.system_prompt = system_prompt
         self.config_path = config_path
         self.tools_file = tools_file
+        self.prompt_id = prompt_id
         self.servers, self.model, self.model_kwargs = self.load_config(config_path)
 
         # Override model if provided
@@ -1039,6 +1041,7 @@ class MCPChatbot:
             debug=self.debug,
             console=self.console,
             thread_id=self.thread_id,
+            prompt_id=self.prompt_id,
         )
 
     def clear_messages(self) -> None:
@@ -1606,6 +1609,7 @@ async def main() -> None:
     # Resolve system prompt using Opik if available, otherwise use direct value
     console = Console()
     system_prompt: str
+    prompt_id: Optional[str] = None
 
     if args.prompt:
         try:
@@ -1613,14 +1617,19 @@ async def main() -> None:
             from opik import Opik
 
             client = Opik()
-            resolved_prompt = resolve_prompt_with_opik(client, args.prompt, console)
+            resolved_prompt, prompt_id = resolve_prompt_with_opik(
+                client, args.prompt, console
+            )
             system_prompt = (
                 resolved_prompt if resolved_prompt is not None else args.prompt
             )
+            if prompt_id:
+                console.print(f"📋 Prompt ID: {prompt_id}")
         except Exception as e:
             # If Opik is not available or fails, use the prompt value directly
             console.print(f"⚠️  Opik not available ({e}), using prompt as direct string")
             system_prompt = args.prompt
+            prompt_id = None
     else:
         # Use default system prompt
         system_prompt = """
@@ -1635,6 +1644,7 @@ with any of the available tools.
         model_override=args.model,
         model_args_override=model_args_override,
         tools_file=args.tools_file,
+        prompt_id=prompt_id,
     )
     await bot.run()
 

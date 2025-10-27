@@ -931,8 +931,14 @@ def init_opik_and_load_dataset(dataset_name: str, console: Console) -> tuple[Opi
     return client, dataset
 
 
-def resolve_prompt_with_opik(client: Opik, prompt_value: str, console: Console) -> str:
-    """Resolve prompt by name via Opik, falling back to the provided value."""
+def resolve_prompt_with_opik(
+    client: Opik, prompt_value: str, console: Console
+) -> tuple[str, Optional[str]]:
+    """Resolve prompt by name via Opik, falling back to the provided value.
+
+    Returns:
+        tuple: (prompt_content, prompt_id) where prompt_id is None if not found in Opik
+    """
     # First check if prompt_value is a filename and load content from file
     import os
 
@@ -945,7 +951,7 @@ def resolve_prompt_with_opik(client: Opik, prompt_value: str, console: Console) 
                 console.print(
                     f"✅ Loaded prompt from file: {file_content[:100]}{'...' if len(file_content) > 100 else ''}"
                 )
-                return file_content
+                return file_content, None  # No prompt_id for file-based prompts
             else:
                 console.print(
                     f"⚠️  File '{prompt_value}' is empty, falling back to Opik lookup"
@@ -966,16 +972,20 @@ def resolve_prompt_with_opik(client: Opik, prompt_value: str, console: Console) 
             console.print(
                 "⚠️  Prompt found in Opik but content is None/empty/'None', using original prompt value"
             )
-            return prompt_value
+            return prompt_value, None
         console.print(
             f"✅ Found prompt in Opik: {prompt_content[:100]}{'...' if len(prompt_content) > 100 else ''}"
         )
-        return prompt_content
+        # Extract prompt_id from the prompt object if available
+        prompt_id = getattr(prompt, "id", None) or getattr(prompt, "prompt_id", None)
+        if prompt_id:
+            console.print(f"📋 Prompt ID: {prompt_id}")
+        return prompt_content, prompt_id
     except Exception as e:
         console.print(
             f"⚠️  Prompt '{prompt_value}' not found in Opik ({e}), using as direct prompt"
         )
-        return prompt_value
+        return prompt_value, None
 
 
 def _list_available_metrics_from_module(metrics_module: Any) -> List[str]:
@@ -1157,6 +1167,7 @@ async def chat_with_tools(
     debug: bool = False,
     console: Optional[Console] = None,
     thread_id: Optional[str] = None,
+    prompt_id: Optional[str] = None,
 ) -> str:
     """
     Shared chat function that handles LLM calls with tool execution.
@@ -1182,12 +1193,18 @@ async def chat_with_tools(
     if not mcp_manager.sessions:
         raise RuntimeError("Not connected to any MCP servers.")
 
-    # Update Opik context with thread_id for conversation grouping
-    if thread_id:
+    # Update Opik context with thread_id and prompt_id for conversation grouping
+    if thread_id or prompt_id:
         try:
             from opik import opik_context
 
-            opik_context.update_current_trace(thread_id=thread_id)
+            context_updates = {}
+            if thread_id:
+                context_updates["thread_id"] = thread_id
+            if prompt_id:
+                context_updates["prompt_id"] = prompt_id
+
+            opik_context.update_current_trace(**context_updates)
         except Exception:
             # Opik not available, continue without tracing
             pass
