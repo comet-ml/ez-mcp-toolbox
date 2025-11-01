@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import json
 import sys
+import signal
 import importlib.util
 import warnings
 from typing import Any, Dict, List, Optional
@@ -87,7 +88,6 @@ class MCPOptimizer(MCPChatbot):
         self.config = config
         self.client: Optional[Any] = None
         self.dataset: Optional[Any] = None
-        self._current_chat_prompt: Optional[Any] = None
 
     def configure_opik(self) -> None:
         """Configure Opik based on the specified mode."""
@@ -156,6 +156,21 @@ class MCPOptimizer(MCPChatbot):
             return prompt_value, None
 
     # evaluation task no longer used; removed
+
+    def validate_metrics(self) -> None:
+        """Validate that the configured metrics exist before starting async operations.
+
+        This allows for early exit with clean error messages before any async tasks are created.
+        """
+        if self.config.metrics_file is None:
+            raise ValueError(
+                "Optimizer requires a metrics file. Use --metrics-file parameter."
+            )
+        # Just validate - don't return the metrics yet
+        # This will raise ValueError if metric doesn't exist
+        load_metrics_by_names_for_optimizer(
+            self.config.metric, self.config.metrics_file, self.console
+        )
 
     def get_metrics(self) -> List[Any]:
         """Get the metrics to use for optimization.
@@ -324,51 +339,15 @@ class MCPOptimizer(MCPChatbot):
                 else self.config.input_field
             )
 
-            # Create a custom ChatPrompt subclass that clears messages between uses
-            class ClearableChatPrompt(ChatPrompt):
-                """ChatPrompt subclass that clears messages between uses to prevent context window overflow."""
-
-                def __init__(self, *args, **kwargs):
-                    super().__init__(*args, **kwargs)
-                    self._original_system = kwargs.get("system", "")
-                    self._original_user = kwargs.get("user", "")
-                    self._cleared = False
-
-                def get_messages(self, dataset_item=None):
-                    """Override get_messages to clear messages between uses."""
-                    if not self._cleared:
-                        # Clear messages but keep the system prompt
-                        # We need at least one message for the LLM
-                        system_message = {
-                            "role": "system",
-                            "content": self._original_system,
-                        }
-                        self.set_messages([system_message])
-                        self._cleared = True
-
-                    # Call parent method to get messages
-                    return super().get_messages(dataset_item)
-
-                def clear_messages(self):
-                    """Manually clear messages and reset to original state."""
-                    # Keep the system prompt to avoid empty messages error
-                    system_message = {
-                        "role": "system",
-                        "content": self._original_system,
-                    }
-                    self.set_messages([system_message])
-                    self._cleared = True
-
-            chat_prompt = ClearableChatPrompt(
+            # Create ChatPrompt - let it handle message accumulation internally
+            # The optimizer will manage clearing between dataset items
+            chat_prompt = ChatPrompt(
                 system=resolved_prompt,
                 # Use the selected user field as the user template, e.g., "{question}"
                 user="{" + user_field + "}",
                 tools=tools_for_prompt if tools_for_prompt else None,
                 function_map=function_map if function_map else None,
             )
-
-            # Store reference to chat_prompt for message clearing
-            self._current_chat_prompt = chat_prompt
 
             # Create the optimizer instance based on config
             optimizer_class = getattr(
@@ -392,19 +371,102 @@ class MCPOptimizer(MCPChatbot):
             optimizer = optimizer_class(**optimizer_constructor_kwargs)
 
             # Prepare parameters for optimizer.optimize_prompt
-            # Wrap the metric function to handle message clearing, but otherwise use it directly
+            # Wrap the metric function to handle message clearing and feedback logging
             # The metric function should take (dataset_item, llm_output) as parameters
             def optimizer_metric(dataset_item, llm_output):
                 # Clear messages before each metric evaluation to prevent context window overflow
                 # This is the same approach used in the evaluator
                 self.clear_messages()
 
-                # Also clear the ChatPrompt messages if it has the method
-                if hasattr(chat_prompt, "clear_messages"):
-                    chat_prompt.clear_messages()
-
                 # Call the metric function directly - it should take (dataset_item, llm_output)
-                return primary_metric_fn(dataset_item, llm_output)
+                score = primary_metric_fn(dataset_item, llm_output)
+
+                if self.config.debug:
+                    self.console.print(
+                        f"🔍 DEBUG: Metric returned score: {score} (type: {type(score)})"
+                    )
+
+                # Log feedback score to the current trace for OPIK optimizer
+                # This is required for the optimizer to collect feedback scores
+                # OPIK optimizers expect feedback_scores to be logged to traces
+                try:
+                    from opik import opik_context
+                    from opik.evaluation.metrics.score_result import ScoreResult
+
+                    # Extract score value and metric name from ScoreResult if that's what we got
+                    # Otherwise treat it as a plain float/number
+                    if isinstance(score, ScoreResult):
+                        score_value = (
+                            float(score.value) if score.value is not None else 0.0
+                        )
+                        metric_name = (
+                            score.name
+                            if score.name
+                            else self.config.metric.split(",")[0].strip()
+                        )
+                    else:
+                        # Plain number or other type
+                        score_value = float(score) if score is not None else 0.0
+                        metric_name = self.config.metric.split(",")[0].strip()
+
+                    # Try to get the trace object and use log_feedback_score method
+                    # This is the recommended way according to OPIK documentation
+                    try:
+                        current_trace = opik_context.get_current_trace()
+                        if current_trace is not None and hasattr(
+                            current_trace, "log_feedback_score"
+                        ):
+                            # Use the trace's log_feedback_score method
+                            current_trace.log_feedback_score(
+                                name=metric_name,
+                                value=score_value,
+                            )
+                            if self.config.debug:
+                                self.console.print(
+                                    f"✅ Logged feedback score via trace.log_feedback_score: {metric_name}={score_value}"
+                                )
+                        else:
+                            # Fallback to update_current_trace if trace object method not available
+                            from opik.opik_context import FeedbackScoreDict
+
+                            feedback_score: FeedbackScoreDict = {
+                                "name": metric_name,
+                                "value": score_value,
+                            }
+                            opik_context.update_current_trace(
+                                feedback_scores=[feedback_score]
+                            )
+                            if self.config.debug:
+                                self.console.print(
+                                    f"✅ Logged feedback score via update_current_trace: {metric_name}={score_value}"
+                                )
+                    except AttributeError:
+                        # get_current_trace might not exist in some OPIK versions
+                        # Fallback to update_current_trace
+                        from opik.opik_context import FeedbackScoreDict
+
+                        feedback_score_fallback: FeedbackScoreDict = {
+                            "name": metric_name,
+                            "value": score_value,
+                        }
+                        opik_context.update_current_trace(
+                            feedback_scores=[feedback_score_fallback]
+                        )
+                        if self.config.debug:
+                            self.console.print(
+                                f"✅ Logged feedback score via update_current_trace (fallback): {metric_name}={score_value}"
+                            )
+
+                except Exception as e:
+                    # If logging fails, continue - the score is still returned
+                    # The optimizer will still use the returned score, but may show warnings
+                    if self.config.debug:
+                        self.console.print(f"⚠️  Failed to log feedback score: {e}")
+                        import traceback
+
+                        self.console.print(traceback.format_exc())
+
+                return score
 
             optimize_kwargs = {
                 "prompt": chat_prompt,
@@ -463,6 +525,7 @@ class MCPOptimizer(MCPChatbot):
     async def run(self) -> None:
         """Run the complete optimization process."""
         try:
+            # Metrics are validated early in main() before async operations start
             # Configure Opik
             self.configure_opik()
 
@@ -498,13 +561,29 @@ class MCPOptimizer(MCPChatbot):
 
             return results
 
+        except asyncio.CancelledError:
+            # Handle cancellation gracefully - allow cleanup to run
+            self.console.print("⚠️  Optimization was cancelled")
+            raise
+        except (ValueError, RuntimeError) as e:
+            # For validation errors (like unknown metrics), exit cleanly
+            # Don't call sys.exit() here - let the exception propagate to main()
+            # which will handle it properly
+            self.console.print(f"❌ Optimization failed: {e}")
+            if self.config.debug:
+                import traceback
+
+                self.console.print(traceback.format_exc())
+            # Re-raise to let main() handle the exit
+            raise
         except Exception as e:
             self.console.print(f"❌ Optimization failed: {e}")
             if self.config.debug:
                 import traceback
 
                 self.console.print(traceback.format_exc())
-            sys.exit(1)
+            # Re-raise to let main() handle the exit
+            raise
         finally:
             # Restore original litellm.completion if we patched it
             if hasattr(self, "_original_completion"):
@@ -782,6 +861,36 @@ def main() -> None:
     """Main entry point for ez-mcp-optimize."""
     args = parse_arguments()
 
+    # Track if we've been interrupted
+    interrupted = False
+    main_task_ref: Optional[asyncio.Task[Any]] = None
+
+    def signal_handler(signum, frame):
+        """Handle SIGINT (Control+C) and SIGTERM gracefully."""
+        nonlocal interrupted, main_task_ref
+        if not interrupted:
+            interrupted = True
+            print("\n⚠️  Interrupt received, shutting down gracefully...")
+            # Cancel the main task if we have a reference to it
+            task_to_cancel = main_task_ref
+            if task_to_cancel is not None and not task_to_cancel.done():
+                task_to_cancel.cancel()
+            # Also try to cancel tasks in the current event loop if it exists
+            try:
+                loop = asyncio.get_running_loop()
+                # Cancel all tasks except the one calling this handler
+                current_task = asyncio.current_task(loop)
+                for task in asyncio.all_tasks(loop):
+                    if task != current_task and not task.done():
+                        task.cancel()
+            except RuntimeError:
+                # No event loop running, that's fine - KeyboardInterrupt will be raised
+                pass
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # Handle --list-metrics option
     if args.list_metrics:
         console = Console()
@@ -922,6 +1031,14 @@ def main() -> None:
     # Create and run optimizer
     optimizer = MCPOptimizer(config)
 
+    # Validate metrics early before starting async operations for clean error exit
+    try:
+        optimizer.validate_metrics()
+    except ValueError as e:
+        console = Console()
+        console.print(f"❌ {e}")
+        sys.exit(1)
+
     # Handle async execution with proper cleanup
     try:
         import nest_asyncio
@@ -932,14 +1049,42 @@ def main() -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
+        # Create the main task and store reference for signal handler
+        main_task = loop.create_task(optimizer.run())
+        main_task_ref = main_task  # Store reference for signal handler
+
+        exit_code = 0
         try:
-            loop.run_until_complete(optimizer.run())
+            loop.run_until_complete(main_task)
+        except KeyboardInterrupt:
+            # Handle KeyboardInterrupt (Control+C)
+            if not interrupted:
+                print("\n⚠️  Interrupt received, shutting down gracefully...")
+            interrupted = True
+            exit_code = 130  # Standard exit code for SIGINT
+            # Cancel the main task
+            if not main_task.done():
+                main_task.cancel()
+                try:
+                    loop.run_until_complete(main_task)
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    pass
         except asyncio.CancelledError:
             # Handle cancellation gracefully
-            print("⚠️  Optimization was cancelled")
+            if not interrupted:
+                print("⚠️  Optimization was cancelled")
+            exit_code = 130
+        except (ValueError, RuntimeError) as e:
+            # Handle validation errors cleanly
+            print(f"❌ Optimization failed: {e}")
+            exit_code = 1
         except Exception as e:
             print(f"❌ Optimization failed: {e}")
-            raise
+            if args.debug:
+                import traceback
+
+                traceback.print_exc()
+            exit_code = 1
         finally:
             # Properly clean up LiteLLM async clients first
             try:
@@ -1026,8 +1171,20 @@ def main() -> None:
             except Exception as e:
                 print(f"⚠️  Error during task cleanup: {e}")
             finally:
+                # Ensure cleanup runs even if interrupted
+                if interrupted:
+                    print("🧹 Performing cleanup...")
                 loop.close()
 
+        # Exit with the appropriate code after cleanup
+        if exit_code != 0:
+            sys.exit(exit_code)
+
+    except KeyboardInterrupt:
+        # Handle KeyboardInterrupt at the outer level
+        if not interrupted:
+            print("\n⚠️  Interrupt received, shutting down gracefully...")
+        sys.exit(130)
     except Exception:
         # Fallback: try to run in a new thread with new event loop
         import concurrent.futures
@@ -1037,9 +1194,14 @@ def main() -> None:
             asyncio.set_event_loop(new_loop)
             try:
                 return new_loop.run_until_complete(optimizer.run())
+            except KeyboardInterrupt:
+                if not interrupted:
+                    print("\n⚠️  Interrupt received, shutting down gracefully...")
+                return None
             except asyncio.CancelledError:
                 # Handle cancellation gracefully
-                print("⚠️  Optimization was cancelled")
+                if not interrupted:
+                    print("⚠️  Optimization was cancelled")
                 return None
             except Exception as e:
                 print(f"❌ Optimization failed: {e}")
@@ -1134,7 +1296,14 @@ def main() -> None:
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(run_in_thread)
-            future.result()
+            try:
+                future.result()
+            except KeyboardInterrupt:
+                if not interrupted:
+                    print("\n⚠️  Interrupt received, shutting down gracefully...")
+                # Cancel the future
+                future.cancel()
+                sys.exit(130)
 
 
 if __name__ == "__main__":
