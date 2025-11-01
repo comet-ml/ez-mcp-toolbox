@@ -59,7 +59,7 @@ class EvaluationConfig:
     output_field: str = "output"
     output_ref: str = "reference"
     model: str = "gpt-3.5-turbo"
-    model_kwargs: Optional[Dict[str, Any]] = None
+    model_parameters: Optional[Dict[str, Any]] = None
     config_path: Optional[str] = None
     tools_file: Optional[str] = None
     num: Optional[int] = None
@@ -74,7 +74,7 @@ class MCPEvaluator(MCPChatbot):
             config_path=config.config_path or "ez-config.json",
             system_prompt=config.prompt,
             model_override=config.model,
-            model_args_override=config.model_kwargs,
+            model_args_override=config.model_parameters,
             tools_file=config.tools_file,
             debug=config.debug,
         )
@@ -424,7 +424,7 @@ Examples:
   ez-mcp-eval --prompt "Summarize this text" --dataset "summarization-dataset" --metric "LevenshteinRatio" --experiment-name "summarization-test"
   ez-mcp-eval --prompt "Translate to French" --dataset "translation-dataset" --metric "Hallucination,LevenshteinRatio" --opik local
   ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --input "question" --output "reference=answer"
-  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model-kwargs '{"temperature": 0.7, "max_tokens": 1000}'
+  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'
   ez-mcp-eval --prompt "Answer the question" --dataset "large-dataset" --metric "LevenshteinRatio" --num 100
   ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metrics-file "my_metrics.py"
   ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --tools-file "my_tools.py"
@@ -493,9 +493,15 @@ Examples:
     )
 
     parser.add_argument(
-        "--model-kwargs",
+        "--model-parameters",
         type=str,
         help='JSON string of additional keyword arguments to pass to the LLM model (e.g., \'{"temperature": 0.7, "max_tokens": 1000}\')',
+    )
+
+    parser.add_argument(
+        "--model-kwargs",
+        type=str,
+        help=argparse.SUPPRESS,  # Hide from help, but keep for backwards compatibility
     )
 
     parser.add_argument(
@@ -767,11 +773,32 @@ def main() -> None:
     input_field = args.input
     output_ref, reference_field = parse_output_mapping(args.output)
 
-    # Parse model kwargs JSON
-    model_kwargs = None
-    if args.model_kwargs:
+    # Parse model parameters JSON (with backwards compatibility for model-kwargs)
+    model_parameters = None
+    if args.model_parameters and args.model_kwargs:
+        warnings.warn(
+            "Both --model-parameters and --model-kwargs were provided. "
+            "Using --model-parameters and ignoring --model-kwargs.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if args.model_parameters:
         try:
-            model_kwargs = json.loads(args.model_kwargs)
+            model_parameters = json.loads(args.model_parameters)
+        except json.JSONDecodeError as e:
+            console = Console()
+            console.print(f"❌ Invalid JSON in --model-parameters: {e}")
+            sys.exit(1)
+    elif args.model_kwargs:
+        # Backwards compatibility: issue deprecation warning
+        warnings.warn(
+            "--model-kwargs is deprecated and will be removed in a future version. "
+            "Please use --model-parameters instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            model_parameters = json.loads(args.model_kwargs)
         except json.JSONDecodeError as e:
             console = Console()
             console.print(f"❌ Invalid JSON in --model-kwargs: {e}")
@@ -792,7 +819,7 @@ def main() -> None:
         output_field="llm_output",  # Task always returns {"llm_output": response}
         output_ref=output_ref,  # The metric's expected field name (e.g., "reference")
         model=args.model,
-        model_kwargs=model_kwargs,
+        model_parameters=model_parameters,
         config_path=args.config,
         tools_file=args.tools_file,
         num=args.num,

@@ -43,8 +43,8 @@ dependencies = [
     "prompt-toolkit>=3.0.0",
     "nest-asyncio>=1.5.0",
     "pillow>=9.0.0",
-    "opik>=1.8.84",
-    "opik_optimizer<=2.1.3",
+    "opik>=1.8.97",
+    "opik_optimizer>=2.2.1",
     "matplotlib>=3.5.0",
 ]
 

@@ -1047,8 +1047,78 @@ def load_metrics_by_names(
                 console.print(f"     - {available_metric}")
             raise ValueError(f"Unknown metric: {metric_name}")
 
-        metric_instances.append(metric_class())
+        metric_instance = metric_class()
+
+        # Ensure OPIK integration for ALL metrics (both custom and built-in)
+        from opik.evaluation.metrics import BaseMetric
+
+        if isinstance(metric_instance, BaseMetric):
+            # Enable OPIK tracking for all metrics
+            if hasattr(metric_instance, "track"):
+                metric_instance.track = True
+                if source_module == "custom metrics file":
+                    console.print(
+                        f"✅ Enabled OPIK tracking for custom metric: {metric_name}"
+                    )
+                else:
+                    console.print(
+                        f"✅ Enabled OPIK tracking for built-in metric: {metric_name}"
+                    )
+        else:
+            console.print(
+                f"⚠️  Warning: Metric '{metric_name}' should inherit from BaseMetric for proper OPIK integration"
+            )
+
+        metric_instances.append(metric_instance)
         console.print(f"✅ Loaded metric: {metric_name} (from {source_module})")
+
+    return metric_instances
+
+
+def load_metrics_by_names_for_optimizer(
+    metric_names_csv: str, metrics_file: str, console: Console
+) -> List[Any]:
+    """Instantiate metrics by name from a custom file ONLY (for optimizer use)."""
+    names = [name.strip() for name in metric_names_csv.split(",")]
+    metric_instances: List[Any] = []
+
+    if not metrics_file:
+        raise ValueError(
+            "Optimizer requires a metrics file. Use --metrics-file parameter."
+        )
+
+    custom_module = _load_metrics_from_file(metrics_file, console)
+
+    for metric_name in names:
+        if not hasattr(custom_module, metric_name):
+            console.print(
+                f"❌ Unknown metric '{metric_name}' in metrics file. Available metrics:"
+            )
+            console.print("   From custom metrics file:")
+            for available_metric in _list_available_metrics_from_module(custom_module):
+                console.print(f"     - {available_metric}")
+            raise ValueError(f"Unknown metric: {metric_name}")
+
+        metric_class = getattr(custom_module, metric_name)
+        metric_instance = metric_class()
+
+        # Ensure OPIK integration for custom metrics
+        from opik.evaluation.metrics import BaseMetric
+
+        if isinstance(metric_instance, BaseMetric):
+            # Enable OPIK tracking for custom metrics
+            if hasattr(metric_instance, "track"):
+                metric_instance.track = True
+                console.print(
+                    f"✅ Enabled OPIK tracking for custom metric: {metric_name}"
+                )
+        else:
+            console.print(
+                f"⚠️  Warning: Custom metric '{metric_name}' should inherit from BaseMetric for proper OPIK integration"
+            )
+
+        metric_instances.append(metric_instance)
+        console.print(f"✅ Loaded metric: {metric_name} (from custom metrics file)")
 
     return metric_instances
 
@@ -1160,7 +1230,7 @@ async def chat_with_tools(
     user_text: str,
     system_prompt: str,
     model: str,
-    model_kwargs: Dict[str, Any],
+    model_parameters: Dict[str, Any],
     mcp_manager: Any,
     messages: List[Dict[str, Any]],
     max_rounds: int = 4,
@@ -1179,7 +1249,7 @@ async def chat_with_tools(
         user_text: The user's input text
         system_prompt: The system prompt to use
         model: The LLM model to use
-        model_kwargs: Additional model parameters
+        model_parameters: Additional model parameters
         mcp_manager: The MCP manager instance
         messages: List of messages for conversation history
         max_rounds: Maximum number of conversation rounds
@@ -1236,7 +1306,7 @@ async def chat_with_tools(
                         tools=tools if tools else None,
                         debug=debug,
                         console=console,
-                        **model_kwargs,
+                        **model_parameters,
                     )
             else:
                 # Call LLM without spinner
@@ -1246,7 +1316,7 @@ async def chat_with_tools(
                     tools=tools if tools else None,
                     debug=debug,
                     console=console,
-                    **model_kwargs,
+                    **model_parameters,
                 )
 
             # Use common utility function to extract content and tool calls

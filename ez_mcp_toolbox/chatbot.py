@@ -7,6 +7,7 @@ import argparse
 import io
 import traceback
 import warnings
+import ast
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
@@ -251,15 +252,15 @@ class MCPChatbot:
         self.config_path = config_path
         self.tools_file = tools_file
         self.prompt_id = prompt_id
-        self.servers, self.model, self.model_kwargs = self.load_config(config_path)
+        self.servers, self.model, self.model_parameters = self.load_config(config_path)
 
         # Override model if provided
         if model_override:
             self.model = model_override
 
-        # Override model kwargs if provided
+        # Override model parameters if provided
         if model_args_override:
-            self.model_kwargs = model_args_override
+            self.model_parameters = model_args_override
         self.max_rounds = max_rounds
         self.debug = debug
         self.console = Console()
@@ -324,7 +325,7 @@ class MCPChatbot:
             # Use default configuration when no config file exists
             config = {
                 "model": "openai/gpt-4o-mini",
-                "model_kwargs": {"temperature": 0.2},
+                "model_parameters": {"temperature": 0.2},
                 "mcp_servers": [
                     {
                         "name": "ez-mcp-server",
@@ -335,11 +336,23 @@ class MCPChatbot:
                 ],
             }
 
-        # Extract model configuration
+        # Extract model configuration (support both model_parameters and model_kwargs for backwards compatibility)
         model = config.get("model", "openai/gpt-4o-mini")
-        model_kwargs = config.get("model_kwargs", {"temperature": 0.2})
+        # Prefer model_parameters, fall back to model_kwargs for backwards compatibility
+        if "model_parameters" in config:
+            model_parameters = config["model_parameters"]
+        elif "model_kwargs" in config:
+            warnings.warn(
+                "Config file uses 'model_kwargs' which is deprecated. "
+                "Please update to use 'model_parameters' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            model_parameters = config["model_kwargs"]
+        else:
+            model_parameters = {"temperature": 0.2}
 
-        return config.get("mcp_servers", []), model, model_kwargs
+        return config.get("mcp_servers", []), model, model_parameters
 
     async def connect_all_servers(self) -> None:
         """Connect to all configured MCP servers via subprocess."""
@@ -1034,7 +1047,7 @@ class MCPChatbot:
             user_text=user_text,
             system_prompt=self.system_prompt,
             model=self.model,
-            model_kwargs=self.model_kwargs,
+            model_parameters=self.model_parameters,
             mcp_manager=self.mcp_manager,
             messages=self.messages,
             max_rounds=self.max_rounds or 4,
@@ -1100,7 +1113,7 @@ class MCPChatbot:
                 "[dim]Type '/show tools SERVER' to list tools for a specific server.[/dim]"
             )
             self.console.print(
-                "[dim]Type '/run SERVER.TOOL [args]' to execute a tool.[/dim]"
+                "[dim]Type '/run SERVER.TOOL {'key': 'value'}' to execute a tool with JSON/dict arguments.[/dim]"
             )
             self.console.print(
                 "[dim]Type '!python_code' to execute Python code (e.g., '!print(2+2)').[/dim]\n"
@@ -1151,7 +1164,7 @@ class MCPChatbot:
                         await self._handle_run_tool(tool_command)
                     else:
                         self.console.print(
-                            "[yellow]Usage: /run SERVER.TOOL [args][/yellow]"
+                            "[yellow]Usage: /run SERVER.TOOL {'key': 'value'} or /run SERVER.TOOL {\"key\": \"value\"}[/yellow]"
                         )
                     continue
                 elif q.startswith("!"):
@@ -1355,16 +1368,23 @@ class MCPChatbot:
             self.console.print(f"Error getting tools: {e}")
 
     async def _handle_run_tool(self, tool_command: str) -> None:
-        """Handle /run SERVER.TOOL [args] commands."""
+        """Handle /run SERVER.TOOL [args] commands.
+
+        Args format: JSON dict or Python dict literal, e.g.:
+        /run SERVER.TOOL {"key": "value", "num": 1}
+        /run SERVER.TOOL {'key': 'value', 'num': 1}
+        """
         try:
             # Parse the tool command
-            parts = tool_command.split()
+            parts = tool_command.split(maxsplit=1)
             if not parts:
-                self.console.print("[yellow]Usage: /run SERVER.TOOL [args][/yellow]")
+                self.console.print(
+                    "[yellow]Usage: /run SERVER.TOOL {'key': 'value'} or /run SERVER.TOOL {\"key\": \"value\"}[/yellow]"
+                )
                 return
 
             tool_identifier = parts[0]
-            args = parts[1:] if len(parts) > 1 else []
+            args_str = parts[1] if len(parts) > 1 else "{}"
 
             # Parse tool_identifier to extract server and tool names
             if "." not in tool_identifier:
@@ -1383,15 +1403,32 @@ class MCPChatbot:
                 )
                 return
 
-            # Parse arguments into kwargs
+            # Parse arguments as JSON or Python dict literal
             kwargs = {}
-            for arg in args:
-                if "=" in arg:
-                    key, value = arg.split("=", 1)
-                    kwargs[key] = value
-                else:
-                    # If no key=value format, treat as positional (we'll use a generic key)
-                    kwargs[f"arg_{len(kwargs)}"] = arg
+            if args_str.strip():
+                try:
+                    # First try to parse as JSON (double quotes)
+                    kwargs = json.loads(args_str)
+                except json.JSONDecodeError:
+                    try:
+                        # If JSON fails, try to parse as Python dict literal (single quotes)
+                        # Use ast.literal_eval for safe evaluation
+                        parsed = ast.literal_eval(args_str)
+                        if isinstance(parsed, dict):
+                            kwargs = parsed
+                        else:
+                            self.console.print(
+                                f"[yellow]Warning: Arguments should be a dict, got {type(parsed).__name__}. Using empty dict.[/yellow]"
+                            )
+                            kwargs = {}
+                    except (ValueError, SyntaxError) as e:
+                        self.console.print(
+                            f"[red]Error: Invalid arguments format. Expected JSON dict or Python dict literal. Error: {e}[/red]"
+                        )
+                        self.console.print(
+                            "[yellow]Example: /run SERVER.TOOL {'key': 'value', 'num': 1}[/yellow]"
+                        )
+                        return
 
             # Call the tool
             session = self.mcp_manager.sessions[server_name]
@@ -1417,8 +1454,6 @@ class MCPChatbot:
                 # Display the result appropriately based on its type
                 if isinstance(processed_result, (dict, list)):
                     # For structured data, pretty print as JSON
-                    import json
-
                     self.console.print(json.dumps(processed_result, indent=2))
                 else:
                     # For strings and other types, display as-is
@@ -1497,7 +1532,7 @@ def create_default_config(config_path: str = "ez-config.json") -> None:
     """Create a default ez-config.json file with example configuration."""
     default_config = {
         "model": "openai/gpt-4o-mini",
-        "model_kwargs": {"temperature": 0.0},
+        "model_parameters": {"temperature": 0.0},
         "mcp_servers": [
             {
                 "name": "ez-mcp-server",
@@ -1533,7 +1568,7 @@ Examples:
   ez-mcp-chatbot --prompt ./my_prompt.txt                     # Load from file
   ez-mcp-chatbot --prompt my_optimized_prompt                  # Load from Opik
   ez-mcp-chatbot --model "openai/gpt-4"  # Override model from config
-  ez-mcp-chatbot --model-args '{"temperature": 0.7, "max_tokens": 1000}'  # Override model args
+  ez-mcp-chatbot --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'  # Override model parameters
   ez-mcp-chatbot --tools-file "my_tools.py"  # Use custom tools file
         """,
     )
@@ -1581,9 +1616,15 @@ Examples:
     )
 
     parser.add_argument(
-        "--model-args",
+        "--model-parameters",
         type=str,
         help='JSON string of additional keyword arguments to pass to the LLM model (e.g., \'{"temperature": 0.7, "max_tokens": 1000}\')',
+    )
+
+    parser.add_argument(
+        "--model-kwargs",
+        type=str,
+        help=argparse.SUPPRESS,  # Hide from help, but keep for backwards compatibility
     )
 
     return parser.parse_args()
@@ -1596,14 +1637,35 @@ async def main() -> None:
     # Configure Opik based on command-line argument
     configure_opik(args.opik)
 
-    # Parse model args JSON
+    # Parse model parameters JSON (with backwards compatibility for model-kwargs)
     model_args_override = None
-    if args.model_args:
+    if args.model_parameters and args.model_kwargs:
+        warnings.warn(
+            "Both --model-parameters and --model-kwargs were provided. "
+            "Using --model-parameters and ignoring --model-kwargs.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if args.model_parameters:
         try:
-            model_args_override = json.loads(args.model_args)
+            model_args_override = json.loads(args.model_parameters)
         except json.JSONDecodeError as e:
             console = Console()
-            console.print(f"❌ Invalid JSON in --model-args: {e}")
+            console.print(f"❌ Invalid JSON in --model-parameters: {e}")
+            sys.exit(1)
+    elif args.model_kwargs:
+        # Backwards compatibility: issue deprecation warning
+        warnings.warn(
+            "--model-kwargs is deprecated and will be removed in a future version. "
+            "Please use --model-parameters instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            model_args_override = json.loads(args.model_kwargs)
+        except json.JSONDecodeError as e:
+            console = Console()
+            console.print(f"❌ Invalid JSON in --model-kwargs: {e}")
             sys.exit(1)
 
     # Resolve system prompt using Opik if available, otherwise use direct value

@@ -3,6 +3,7 @@
 Shared MCP utilities for both chatbot and evaluator.
 """
 
+import asyncio
 import json
 import os
 import subprocess
@@ -15,6 +16,113 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from rich.console import Console
 from opik import track
+
+
+def _find_root_exception(exception: Exception, max_depth: int = 10) -> Exception:
+    """
+    Recursively search through ExceptionGroups to find the actual root exception.
+    Prioritizes common actionable exceptions like TimeoutError.
+    """
+    if max_depth <= 0:
+        return exception
+
+    # Check for common actionable exceptions first
+    if isinstance(exception, (TimeoutError, asyncio.TimeoutError)):
+        return exception
+
+    # Check for ExceptionGroup and search through sub-exceptions
+    if hasattr(exception, "exceptions"):
+        try:
+            exceptions_list = exception.exceptions
+            if not isinstance(exceptions_list, (list, tuple)):
+                exceptions_list = [exceptions_list]
+
+            # First, look for TimeoutError or other actionable errors
+            for sub_exc in exceptions_list:
+                if isinstance(sub_exc, (TimeoutError, asyncio.TimeoutError)):
+                    return sub_exc
+                # Recursively search nested ExceptionGroups
+                root = _find_root_exception(sub_exc, max_depth - 1)
+                if isinstance(root, (TimeoutError, asyncio.TimeoutError)):
+                    return root
+
+            # If no timeout found, return the first sub-exception
+            if exceptions_list:
+                return _find_root_exception(exceptions_list[0], max_depth - 1)
+        except Exception:
+            pass
+
+    # Check __cause__ chain
+    if hasattr(exception, "__cause__") and exception.__cause__:
+        cause = exception.__cause__
+        # Only recurse if cause is an Exception (not BaseException)
+        if isinstance(cause, Exception):
+            root = _find_root_exception(cause, max_depth - 1)
+            if isinstance(root, (TimeoutError, asyncio.TimeoutError)):
+                return root
+
+    return exception
+
+
+def extract_exception_details(exception: Exception) -> Dict[str, Any]:
+    """
+    Extract detailed information from an exception, including sub-exceptions
+    from ExceptionGroup or TaskGroup errors.
+
+    Returns a dict with:
+    - message: The main error message
+    - root_exception: The actual root exception (e.g., TimeoutError)
+    - details: Additional details about the exception
+    - sub_exceptions: List of sub-exception details if this is an ExceptionGroup
+    """
+    # Find the root exception (prioritizing actionable ones like TimeoutError)
+    root_exc = _find_root_exception(exception)
+
+    details: Dict[str, Any] = {
+        "message": str(root_exc),
+        "root_exception": root_exc,
+        "root_type": type(root_exc).__name__,
+        "details": "",
+        "sub_exceptions": [],
+        "type": type(exception).__name__,
+    }
+
+    # If we found a TimeoutError, provide a clear message
+    if isinstance(root_exc, (TimeoutError, asyncio.TimeoutError)):
+        details["message"] = f"Tool call timed out ({details['root_type']})"
+        details["is_timeout"] = True
+    else:
+        details["is_timeout"] = False
+
+    # For ExceptionGroups, extract sub-exception details but keep them concise
+    if hasattr(exception, "exceptions"):
+        try:
+            exceptions_list = exception.exceptions
+            if not isinstance(exceptions_list, (list, tuple)):
+                exceptions_list = [exceptions_list]
+
+            details["sub_exceptions"] = []
+            for sub_exc in exceptions_list:
+                sub_details = {
+                    "type": type(sub_exc).__name__,
+                    "message": str(sub_exc)[:200],  # Limit message length
+                }
+                details["sub_exceptions"].append(sub_details)
+        except Exception:
+            pass
+
+    # Check for __cause__ (chained exceptions) if not already handled
+    if (
+        not details.get("is_timeout")
+        and hasattr(exception, "__cause__")
+        and exception.__cause__
+    ):
+        details["cause"] = {
+            "type": type(exception.__cause__).__name__,
+            "message": str(exception.__cause__)[:200],
+        }
+
+    return details
 
 
 @dataclass
@@ -233,12 +341,13 @@ class MCPManager:
                 f"⏳ Executing tool '{actual_tool_name}' with isolated client (6s timeout)"
             )
 
+        timeout_value = 6.0
         try:
             isolated_result = await self._call_tool_isolated(
                 server_name or next(iter(self.sessions.keys()), ""),
                 actual_tool_name,
                 args,
-                timeout=6.0,
+                timeout=timeout_value,
             )
             from .utils import process_mcp_tool_result
 
@@ -257,9 +366,39 @@ class MCPManager:
                     pass
             return processed
         except Exception as e:
+            # Extract detailed exception information
+            exc_details = extract_exception_details(e)
+
+            # Build a clear, actionable error message for the LLM
+            if exc_details.get("is_timeout"):
+                error_message = f"Error executing tool '{actual_tool_name}': The tool call timed out after {timeout_value} seconds. The tool may be taking too long to respond, or there may be a connection issue with the MCP server."
+            else:
+                error_message = f"Error executing tool '{actual_tool_name}': {exc_details['message']}"
+                # Only include sub-exception details if not a timeout (timeouts are clear enough)
+                if (
+                    exc_details.get("sub_exceptions")
+                    and len(exc_details["sub_exceptions"]) <= 3
+                ):
+                    # Only show first few sub-exceptions to avoid clutter
+                    for i, sub_exc in enumerate(exc_details["sub_exceptions"][:2], 1):
+                        error_message += (
+                            f"\n  {i}. {sub_exc['type']}: {sub_exc['message'][:100]}"
+                        )
+
+            # Log concise error in debug mode
             if self.debug:
-                print(f"❌ Tool {actual_tool_name} failed: {e}")
-            return f"Error executing tool '{actual_tool_name}': {e}"
+                self.console.print(f"[red]❌ Tool {actual_tool_name} failed:[/red]")
+                self.console.print(
+                    f"[red]   Root cause: {exc_details['root_type']}: {exc_details['message']}[/red]"
+                )
+                if exc_details.get("is_timeout"):
+                    self.console.print(
+                        f"[yellow]   ⏱️  Tool timed out after {timeout_value} seconds[/yellow]"
+                    )
+                # Only show full traceback in very verbose mode - skip it by default to reduce noise
+                # Users can enable full tracebacks by setting a different debug level if needed
+
+            return error_message
 
     async def _call_tool_isolated(
         self,
@@ -287,12 +426,30 @@ class MCPManager:
         params = StdioServerParameters(
             command=cfg.command, args=cfg.args or [], env=env
         )
-        async with stdio_client(params) as (stdin, write):
-            async with ClientSession(stdin, write) as session:
-                await session.initialize()
-                return await asyncio.wait_for(
-                    session.call_tool(tool_name, arguments), timeout=timeout
+        try:
+            async with stdio_client(params) as (stdin, write):
+                async with ClientSession(stdin, write) as session:
+                    await session.initialize()
+                    return await asyncio.wait_for(
+                        session.call_tool(tool_name, arguments), timeout=timeout
+                    )
+        except Exception as e:
+            # Extract detailed exception information
+            exc_details = extract_exception_details(e)
+
+            # Log concise error in debug mode (detailed traceback handled by caller)
+            if self.debug:
+                self.console.print(f"[red]❌ Error in tool '{tool_name}':[/red]")
+                self.console.print(
+                    f"[red]   Root cause: {exc_details['root_type']}: {exc_details['message']}[/red]"
                 )
+                if exc_details.get("is_timeout"):
+                    self.console.print(
+                        f"[yellow]   ⏱️  Tool timed out after {timeout} seconds[/yellow]"
+                    )
+
+            # Re-raise with enhanced message if needed, or raise original
+            raise
 
     # Thread-safe sync bridge to run execute_tool_call on the correct event loop
     def execute_tool_call_sync(self, tool_call: Any, timeout: float = 30.0) -> Any:

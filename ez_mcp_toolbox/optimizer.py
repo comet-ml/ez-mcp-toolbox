@@ -25,7 +25,7 @@ from .utils import (
     configure_opik,
     init_opik_and_load_dataset,
     resolve_prompt_with_opik,
-    load_metrics_by_names,
+    load_metrics_by_names_for_optimizer,
 )
 from .chatbot import MCPChatbot
 
@@ -59,7 +59,7 @@ class EvaluationConfig:
     # If provided as single FIELD via --output FIELD, use this for ChatPrompt user
     user_field_override: Optional[str] = None
     model: str = "gpt-3.5-turbo"
-    model_kwargs: Optional[Dict[str, Any]] = None
+    model_parameters: Optional[Dict[str, Any]] = None
     config_path: Optional[str] = None
     tools_file: Optional[str] = None
     num: Optional[int] = None
@@ -77,7 +77,7 @@ class MCPOptimizer(MCPChatbot):
             config_path=config.config_path or "ez-config.json",
             system_prompt=config.prompt,
             model_override=config.model,
-            model_args_override=config.model_kwargs,
+            model_args_override=config.model_parameters,
             tools_file=config.tools_file,
             debug=config.debug,
         )
@@ -158,7 +158,11 @@ class MCPOptimizer(MCPChatbot):
 
     def get_metrics(self) -> List[Any]:
         """Get the metrics to use for optimization."""
-        return load_metrics_by_names(
+        if self.config.metrics_file is None:
+            raise ValueError(
+                "Optimizer requires a metrics file. Use --metrics-file parameter."
+            )
+        return load_metrics_by_names_for_optimizer(
             self.config.metric, self.config.metrics_file, self.console
         )
 
@@ -206,6 +210,10 @@ class MCPOptimizer(MCPChatbot):
             primary_metric = metrics[0] if metrics else None
             if not primary_metric:
                 raise ValueError("At least one metric is required for optimization")
+
+            # Ensure OPIK integration is enabled for custom metrics
+            if hasattr(primary_metric, "track"):
+                primary_metric.track = True
 
             # Prepare MCP-provided tools and a function_map that routes calls back to MCP
             tools_for_prompt = self._preloaded_tools or []
@@ -341,10 +349,12 @@ class MCPOptimizer(MCPChatbot):
             if "model" not in optimizer_constructor_kwargs and self.config.model:
                 optimizer_constructor_kwargs["model"] = self.config.model
             if (
-                "model_kwargs" not in optimizer_constructor_kwargs
-                and self.config.model_kwargs is not None
+                "model_parameters" not in optimizer_constructor_kwargs
+                and self.config.model_parameters is not None
             ):
-                optimizer_constructor_kwargs["model_kwargs"] = self.config.model_kwargs
+                optimizer_constructor_kwargs["model_parameters"] = (
+                    self.config.model_parameters
+                )
 
             optimizer = optimizer_class(**optimizer_constructor_kwargs)
 
@@ -360,8 +370,11 @@ class MCPOptimizer(MCPChatbot):
                 if hasattr(chat_prompt, "clear_messages"):
                     chat_prompt.clear_messages()
 
+                # Create a new metric instance for each evaluation to ensure thread safety
+                # and proper OPIK integration
                 metric_class = primary_metric.__class__
                 metric_instance = metric_class()
+
                 # Use the configured reference field from the dataset as the reference input to the metric
                 return metric_instance.score(
                     reference=dataset_item[self.config.reference_field],
@@ -580,7 +593,7 @@ Examples:
   ez-mcp-optimize --prompt "Summarize this text" --dataset "summarization-dataset" --metric "LevenshteinRatio" --experiment-name "summarization-test"
   ez-mcp-optimize --prompt "Translate to French" --dataset "translation-dataset" --metric "Hallucination,LevenshteinRatio" --opik local
   ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --input "question"
-  ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model-kwargs '{"temperature": 0.7, "max_tokens": 1000}'
+  ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'
   ez-mcp-optimize --prompt "Answer the question" --dataset "large-dataset" --metric "LevenshteinRatio" --num 100
   ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metrics-file "my_metrics.py"
   ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --tools-file "my_tools.py"
@@ -603,7 +616,9 @@ Examples:
 
     parser.add_argument(
         "--metrics-file",
-        help="Path to a Python file containing metric definitions. If provided, metrics will be loaded from this file instead of opik.evaluation.metrics",
+        type=str,
+        required=True,
+        help="Path to a Python file containing metric definitions. Required for optimizer.",
     )
 
     parser.add_argument(
@@ -646,9 +661,15 @@ Examples:
     )
 
     parser.add_argument(
-        "--model-kwargs",
+        "--model-parameters",
         type=str,
         help='JSON string of additional keyword arguments to pass to the LLM model (e.g., \'{"temperature": 0.7, "max_tokens": 1000}\')',
+    )
+
+    parser.add_argument(
+        "--model-kwargs",
+        type=str,
+        help=argparse.SUPPRESS,  # Hide from help, but keep for backwards compatibility
     )
 
     parser.add_argument(
@@ -798,11 +819,32 @@ def main() -> None:
         args.output
     )
 
-    # Parse model kwargs JSON
-    model_kwargs = None
-    if args.model_kwargs:
+    # Parse model parameters JSON (with backwards compatibility for model-kwargs)
+    model_parameters = None
+    if args.model_parameters and args.model_kwargs:
+        warnings.warn(
+            "Both --model-parameters and --model-kwargs were provided. "
+            "Using --model-parameters and ignoring --model-kwargs.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if args.model_parameters:
         try:
-            model_kwargs = json.loads(args.model_kwargs)
+            model_parameters = json.loads(args.model_parameters)
+        except json.JSONDecodeError as e:
+            console = Console()
+            console.print(f"❌ Invalid JSON in --model-parameters: {e}")
+            sys.exit(1)
+    elif args.model_kwargs:
+        # Backwards compatibility: issue deprecation warning
+        warnings.warn(
+            "--model-kwargs is deprecated and will be removed in a future version. "
+            "Please use --model-parameters instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            model_parameters = json.loads(args.model_kwargs)
         except json.JSONDecodeError as e:
             console = Console()
             console.print(f"❌ Invalid JSON in --model-kwargs: {e}")
@@ -843,7 +885,7 @@ def main() -> None:
         user_field_override=user_field_override,
         # output mapping no longer needed; metric should accept (dataset_item, llm_output)
         model=args.model,
-        model_kwargs=model_kwargs,
+        model_parameters=model_parameters,
         config_path=args.config,
         tools_file=args.tools_file,
         num=args.num,

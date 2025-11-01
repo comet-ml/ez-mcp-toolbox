@@ -209,7 +209,7 @@ Edit `ez-config.json` to specify your model and MCP servers. For example:
 ```json
 {
   "model": "openai/gpt-4o-mini",
-  "model_kwargs": {
+  "model_parameters": {
     "temperature": 0.2
   },
   "mcp_servers": [
