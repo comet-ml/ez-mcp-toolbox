@@ -503,6 +503,85 @@ def configure_opik(
         print("Continuing without Opik tracing...")
 
 
+async def generate_mcp_mermaid_diagram(mcp_manager: Any) -> Optional[str]:
+    """
+    Generate a mermaid diagram showing MCP servers and their tools.
+
+    Args:
+        mcp_manager: The MCP manager instance
+
+    Returns:
+        Mermaid diagram as a string, or None if unable to generate
+    """
+    try:
+        if not mcp_manager or not mcp_manager.sessions:
+            return None
+
+        diagram_lines = ["block-beta"]
+        diagram_lines.append("    columns 1")  # Stack server and tools vertically
+        server_node_ids = {}
+        server_classes = []
+
+        # Process each server
+        for idx, (server_name, session) in enumerate(mcp_manager.sessions.items()):
+            # Create a sanitized node ID for the server (mermaid doesn't like special chars)
+            server_node_id = f"server_{idx}"
+            tools_block_id = f"{server_node_id}_tools"
+            server_node_ids[server_name] = server_node_id
+
+            # Add server node with round borders using parentheses
+            sanitized_server_name = server_name.replace('"', '\\"')
+            diagram_lines.append(f'    {server_node_id}("📡 {sanitized_server_name}")')
+            server_classes.append(server_node_id)
+
+            # Add space before tools block
+            diagram_lines.append("    space")
+
+            # Get tools for this server
+            try:
+                tools_resp = await session.list_tools()
+                if tools_resp.tools:
+                    # Create a block for tools with column layout (space for label)
+                    diagram_lines.append(f'    block:{tools_block_id}[" "]')
+
+                    # Add classDef inside the tools block
+                    diagram_lines.append(
+                        "        classDef serverStyle fill:#E8F4F8,stroke:#4A90E2,stroke-width:2px"
+                    )
+                    diagram_lines.append("        columns 4")  # 4 columns
+
+                    # Add each tool as a separate node with round borders
+                    for tool_idx, tool in enumerate(tools_resp.tools):
+                        tool_node_id = f"{tools_block_id}_tool_{tool_idx}"
+                        sanitized_tool_name = f"🔧 {tool.name}".replace('"', '\\"')
+                        diagram_lines.append(
+                            f'        {tool_node_id}("{sanitized_tool_name}")'
+                        )
+
+                    diagram_lines.append("    end")
+
+                    # Connect server to tools block
+                    diagram_lines.append(f"    {server_node_id} --> {tools_block_id}")
+            except Exception:
+                # If we can't get tools, skip the tools block
+                pass
+
+        if len(diagram_lines) == 1:
+            # Only the graph TB line, no servers
+            return None
+
+        # Apply server styling
+        if server_classes:
+            for server_id in server_classes:
+                diagram_lines.append(f"    class {server_id} serverStyle")
+
+        return "\n".join(diagram_lines)
+
+    except Exception:
+        # If anything fails, return None to gracefully skip diagram generation
+        return None
+
+
 @track(name="llm_completion", type="llm")
 def call_llm_with_tracing(
     model: str,
@@ -1266,21 +1345,47 @@ async def chat_with_tools(
     if not mcp_manager.sessions:
         raise RuntimeError("Not connected to any MCP servers.")
 
-    # Update Opik context with thread_id and prompt_id for conversation grouping
-    if thread_id or prompt_id:
-        try:
-            from opik import opik_context
+    # Generate mermaid diagram and update Opik context with metadata
+    mermaid_diagram = await generate_mcp_mermaid_diagram(mcp_manager)
 
-            context_updates = {}
-            if thread_id:
-                context_updates["thread_id"] = thread_id
-            if prompt_id:
-                context_updates["prompt_id"] = prompt_id
+    try:
+        from opik import opik_context
 
+        context_updates: Dict[str, Any] = {}
+        if thread_id:
+            context_updates["thread_id"] = thread_id
+        if prompt_id:
+            context_updates["prompt_id"] = prompt_id
+        if mermaid_diagram:
+            # Get existing metadata and merge, preserving what's already there
+            existing_metadata = {}
+            try:
+                current_trace = opik_context.get_current_trace()
+                if (
+                    current_trace
+                    and hasattr(current_trace, "metadata")
+                    and current_trace.metadata
+                ):
+                    existing_metadata = (
+                        current_trace.metadata.copy()
+                        if isinstance(current_trace.metadata, dict)
+                        else {}
+                    )
+            except Exception:
+                pass
+
+            # Set _opik_graph_definition within metadata
+            existing_metadata["_opik_graph_definition"] = {
+                "format": "mermaid",
+                "data": mermaid_diagram,
+            }
+            context_updates["metadata"] = existing_metadata
+
+        if context_updates:
             opik_context.update_current_trace(**context_updates)
-        except Exception:
-            # Opik not available, continue without tracing
-            pass
+    except Exception:
+        # Opik not available, continue without tracing
+        pass
 
     # 1) Fetch tool catalog from all MCP servers
     tools = await mcp_manager._get_all_tools()
