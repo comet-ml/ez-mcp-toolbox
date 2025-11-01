@@ -1078,9 +1078,12 @@ def load_metrics_by_names(
 def load_metrics_by_names_for_optimizer(
     metric_names_csv: str, metrics_file: str, console: Console
 ) -> List[Any]:
-    """Instantiate metrics by name from a custom file ONLY (for optimizer use)."""
+    """Load metric functions by name from a custom file ONLY (for optimizer use).
+
+    The metric must be a Python function that takes (dataset_item, llm_output) as parameters.
+    """
     names = [name.strip() for name in metric_names_csv.split(",")]
-    metric_instances: List[Any] = []
+    metric_functions: List[Any] = []
 
     if not metrics_file:
         raise ValueError(
@@ -1099,28 +1102,28 @@ def load_metrics_by_names_for_optimizer(
                 console.print(f"     - {available_metric}")
             raise ValueError(f"Unknown metric: {metric_name}")
 
-        metric_class = getattr(custom_module, metric_name)
-        metric_instance = metric_class()
+        metric_fn = getattr(custom_module, metric_name)
 
-        # Ensure OPIK integration for custom metrics
-        from opik.evaluation.metrics import BaseMetric
-
-        if isinstance(metric_instance, BaseMetric):
-            # Enable OPIK tracking for custom metrics
-            if hasattr(metric_instance, "track"):
-                metric_instance.track = True
-                console.print(
-                    f"✅ Enabled OPIK tracking for custom metric: {metric_name}"
-                )
-        else:
-            console.print(
-                f"⚠️  Warning: Custom metric '{metric_name}' should inherit from BaseMetric for proper OPIK integration"
+        # Check if it's a class (which we don't want for optimizer)
+        # Classes are callable but also instances of type, so check this first
+        if isinstance(metric_fn, type):
+            raise ValueError(
+                f"Metric '{metric_name}' is a class, but optimizer requires a function. "
+                f"The function should take (dataset_item, llm_output) as parameters."
             )
 
-        metric_instances.append(metric_instance)
-        console.print(f"✅ Loaded metric: {metric_name} (from custom metrics file)")
+        # Verify it's callable (should be a function)
+        if not callable(metric_fn):
+            raise ValueError(
+                f"Metric '{metric_name}' must be a callable function that takes (dataset_item, llm_output) as parameters"
+            )
 
-    return metric_instances
+        metric_functions.append(metric_fn)
+        console.print(
+            f"✅ Loaded metric function: {metric_name} (from custom metrics file)"
+        )
+
+    return metric_functions
 
 
 # Global set to track temporary files for cleanup

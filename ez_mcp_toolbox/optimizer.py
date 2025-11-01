@@ -157,7 +157,10 @@ class MCPOptimizer(MCPChatbot):
     # evaluation task no longer used; removed
 
     def get_metrics(self) -> List[Any]:
-        """Get the metrics to use for optimization."""
+        """Get the metrics to use for optimization.
+
+        Metrics must be Python functions from --metrics-file that take (dataset_item, llm_output) as parameters.
+        """
         if self.config.metrics_file is None:
             raise ValueError(
                 "Optimizer requires a metrics file. Use --metrics-file parameter."
@@ -193,7 +196,7 @@ class MCPOptimizer(MCPChatbot):
             if prompt_id:
                 self.console.print(f"   - Prompt ID: {prompt_id}")
 
-            # Get metrics for optimization
+            # Get metrics for optimization (these are functions, not class instances)
             metrics = self.get_metrics()
             self.console.print("✅ Metrics loaded successfully!")
 
@@ -207,13 +210,9 @@ class MCPOptimizer(MCPChatbot):
             # optimize_prompt(prompt, dataset, metric, experiment_config, n_samples, auto_continue, agent_class, **kwargs)
 
             # Use the first metric as the primary metric for optimization
-            primary_metric = metrics[0] if metrics else None
-            if not primary_metric:
+            primary_metric_fn = metrics[0] if metrics else None
+            if not primary_metric_fn:
                 raise ValueError("At least one metric is required for optimization")
-
-            # Ensure OPIK integration is enabled for custom metrics
-            if hasattr(primary_metric, "track"):
-                primary_metric.track = True
 
             # Prepare MCP-provided tools and a function_map that routes calls back to MCP
             tools_for_prompt = self._preloaded_tools or []
@@ -359,8 +358,8 @@ class MCPOptimizer(MCPChatbot):
             optimizer = optimizer_class(**optimizer_constructor_kwargs)
 
             # Prepare parameters for optimizer.optimize_prompt
-            # Wrap the metric in a function matching optimizer's expected signature
-            # def optimizer_metric(dataset_item: dict[str, Any], llm_output: str) -> ScoreResult
+            # Wrap the metric function to handle message clearing, but otherwise use it directly
+            # The metric function should take (dataset_item, llm_output) as parameters
             def optimizer_metric(dataset_item, llm_output):
                 # Clear messages before each metric evaluation to prevent context window overflow
                 # This is the same approach used in the evaluator
@@ -370,16 +369,8 @@ class MCPOptimizer(MCPChatbot):
                 if hasattr(chat_prompt, "clear_messages"):
                     chat_prompt.clear_messages()
 
-                # Create a new metric instance for each evaluation to ensure thread safety
-                # and proper OPIK integration
-                metric_class = primary_metric.__class__
-                metric_instance = metric_class()
-
-                # Use the configured reference field from the dataset as the reference input to the metric
-                return metric_instance.score(
-                    reference=dataset_item[self.config.reference_field],
-                    output=llm_output,
-                )
+                # Call the metric function directly - it should take (dataset_item, llm_output)
+                return primary_metric_fn(dataset_item, llm_output)
 
             optimize_kwargs = {
                 "prompt": chat_prompt,
@@ -618,7 +609,7 @@ Examples:
         "--metrics-file",
         type=str,
         required=True,
-        help="Path to a Python file containing metric definitions. Required for optimizer.",
+        help="Path to a Python file containing metric function definitions. The metric must be a Python function that takes (dataset_item, llm_output) as parameters. Required for optimizer.",
     )
 
     parser.add_argument(

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 from opik.evaluation import evaluate
-from opik.evaluation import metrics as opik_metrics
+from opik.exceptions import ScoreMethodMissingArguments
 from rich.console import Console
 from dotenv import load_dotenv
 
@@ -28,6 +28,13 @@ from .utils import (
 )
 from .mcp_utils import ServerConfig
 from .chatbot import MCPChatbot
+
+
+class FieldMappingError(Exception):
+    """Custom exception for field mapping errors that should exit cleanly without tracebacks."""
+
+    pass
+
 
 # Suppress litellm RuntimeWarning about coroutines never awaited
 warnings.filterwarnings(
@@ -182,6 +189,10 @@ class MCPEvaluator(MCPChatbot):
         return evaluation_task
 
     def get_metrics(self) -> List[Any]:
+        """Get metrics from either opik.evaluation.metrics OR --metrics-file.
+
+        Metrics should be classes with an instance method named 'score'.
+        """
         return load_metrics_by_names(
             self.config.metric, self.config.metrics_file, self.console
         )
@@ -229,6 +240,15 @@ class MCPEvaluator(MCPChatbot):
                 metrics,
                 self.console,
             )
+
+            # Validate that fields have non-empty values
+            validate_field_values(
+                self.dataset,
+                self.config.input_field,
+                self.config.reference_field,
+                self.console,
+            )
+
             self.console.print("✅ Field validation passed!")
 
             # Create evaluation task with the already-resolved prompt
@@ -274,8 +294,192 @@ class MCPEvaluator(MCPChatbot):
 
             return eval_results
 
+        except ScoreMethodMissingArguments as e:
+            # Catch Opik's specific error and provide clearer guidance
+            error_msg = str(e)
+            self.console.print("\n❌ Evaluation failed: Field mapping error")
+
+            # Extract available fields from error message
+            available_fields = []
+            missing_args = []
+            mismapped_keys = []
+
+            # Parse error message to extract useful information
+            import re
+
+            if "missing arguments:" in error_msg:
+                # Extract missing arguments
+                match = re.search(r"missing arguments:\s*\[(.*?)\]", error_msg)
+                if match:
+                    missing_args = [
+                        arg.strip().strip("'\"") for arg in match.group(1).split(",")
+                    ]
+
+            if "available keys" in error_msg:
+                # Extract available keys
+                match = re.search(
+                    r"available keys.*?are:\s*\[(.*?)\]", error_msg, re.IGNORECASE
+                )
+                if match:
+                    available_fields = [
+                        key.strip().strip("'\"") for key in match.group(1).split(",")
+                    ]
+
+            if "didn't match anything" in error_msg:
+                # Extract mismapped keys
+                match = re.search(r"didn't match anything:\s*\[(.*?)\]", error_msg)
+                if match:
+                    mismapped_keys = [
+                        key.strip().strip("'\"") for key in match.group(1).split(",")
+                    ]
+
+            # If we couldn't extract from error, try to get from dataset
+            if not available_fields:
+                available_fields = get_available_dataset_fields(self.dataset)
+
+            # Display helpful error message
+            self.console.print(f"   {error_msg}")
+
+            if missing_args:
+                self.console.print(
+                    f"\n   Missing required arguments: {', '.join(missing_args)}"
+                )
+
+            if available_fields:
+                self.console.print(
+                    f"\n   Available dataset fields: {', '.join(available_fields)}"
+                )
+
+            if mismapped_keys:
+                self.console.print(
+                    f"\n   Field mapping issue: '{mismapped_keys[0]}' was not found in the dataset"
+                )
+                # Suggest corrections
+                if available_fields:
+                    suggestions = [
+                        f
+                        for f in available_fields
+                        if any(
+                            x in f.lower()
+                            for x in [
+                                mismapped_keys[0].lower(),
+                                "answer",
+                                "reference",
+                                "expected",
+                                "target",
+                                "label",
+                                "output",
+                            ]
+                        )
+                    ]
+                    if suggestions:
+                        self.console.print(f"   💡 Did you mean: {suggestions[0]}?")
+
+            # Get metric parameters and suggest fix
+            try:
+                metrics = self.get_metrics()
+                for metric in metrics:
+                    import inspect
+
+                    if hasattr(metric, "score"):
+                        sig = inspect.signature(metric.score)
+                        param_names = [p for p in sig.parameters.keys() if p != "self"]
+                        if param_names:
+                            self.console.print(
+                                f"\n   Metric '{metric.__class__.__name__}' expects parameters: {', '.join(param_names)}"
+                            )
+
+                            # Suggest a fix
+                            if param_names and available_fields:
+                                # Find reference parameter (usually first or named 'reference')
+                                ref_param = "reference"
+                                if "reference" in param_names:
+                                    ref_param = "reference"
+                                elif len(param_names) > 0:
+                                    ref_param = param_names[0]
+
+                                # Try to find a likely reference field
+                                likely_ref_fields = [
+                                    f
+                                    for f in available_fields
+                                    if any(
+                                        x in f.lower()
+                                        for x in [
+                                            "answer",
+                                            "reference",
+                                            "expected",
+                                            "target",
+                                            "label",
+                                            "expected_output",
+                                        ]
+                                    )
+                                ]
+                                suggested_ref = (
+                                    likely_ref_fields[0]
+                                    if likely_ref_fields
+                                    else (
+                                        available_fields[0]
+                                        if available_fields
+                                        else "FIELD_NAME"
+                                    )
+                                )
+
+                                self.console.print("\n   💡 Suggested fix:")
+                                self.console.print(
+                                    f"      --output {ref_param}={suggested_ref}"
+                                )
+
+                                # Verify input field
+                                likely_input_fields = [
+                                    f
+                                    for f in available_fields
+                                    if any(
+                                        x in f.lower()
+                                        for x in [
+                                            "input",
+                                            "question",
+                                            "query",
+                                            "prompt",
+                                        ]
+                                    )
+                                ]
+                                if (
+                                    likely_input_fields
+                                    and self.config.input_field not in available_fields
+                                ):
+                                    self.console.print(
+                                        f"      --input {likely_input_fields[0]}"
+                                    )
+                            break
+            except Exception:
+                pass
+
+            self.console.print("")
+            # Raise a custom exception that will be caught and handled gracefully
+            raise FieldMappingError()
+
+        except FieldMappingError:
+            # Field mapping errors already have clear error messages printed
+            # Just re-raise to exit cleanly
+            raise
+        except ValueError:
+            # Re-raise ValueError (these are our validation/field mapping errors)
+            # They already have clear error messages, so just pass through
+            raise
         except Exception as e:
-            self.console.print(f"❌ Evaluation failed: {e}")
+            error_msg = str(e)
+            # Check if this is a field-related error
+            if (
+                "not found" in error_msg.lower()
+                or "missing" in error_msg.lower()
+                or "key" in error_msg.lower()
+            ):
+                available_fields = get_available_dataset_fields(self.dataset)
+                if available_fields:
+                    self.console.print(
+                        f"\n   Available dataset fields: {', '.join(available_fields)}"
+                    )
+            self.console.print(f"❌ Evaluation failed: {error_msg}")
             raise
 
     def display_results(self, results: Any) -> None:
@@ -359,13 +563,26 @@ class MCPEvaluator(MCPChatbot):
 
             return results
 
+        except (FieldMappingError, ValueError) as e:
+            # These exceptions already have clear error messages printed
+            # Suppress traceback by setting exception context to None
+            # FieldMappingError is raised after printing helpful error messages
+            # ValueError is raised from validation functions that also print helpful messages
+            if self.config.debug:
+                import traceback
+
+                self.console.print(traceback.format_exc())
+            # Clear exception context to prevent traceback printing
+            e.__context__ = None
+            e.__cause__ = None
+            raise  # Re-raise to exit cleanly
         except Exception as e:
             self.console.print(f"❌ Evaluation failed: {e}")
             if self.config.debug:
                 import traceback
 
                 self.console.print(traceback.format_exc())
-            sys.exit(1)
+            raise
         finally:
             # Clean up MCP connections
             if self.mcp_manager.sessions:
@@ -395,22 +612,20 @@ class MCPEvaluator(MCPChatbot):
                     task for task in asyncio.all_tasks(loop) if not task.done()
                 ]
                 if pending_tasks:
-                    self.console.print(
-                        f"⏳ Found {len(pending_tasks)} pending tasks, cancelling non-essential ones..."
-                    )
-
                     # Cancel all tasks except the current one to avoid hanging
                     current_task = asyncio.current_task(loop)
                     for task in pending_tasks:
                         if task != current_task:
                             try:
                                 task.cancel()
+                                # Suppress exceptions from cancelled tasks to avoid "Task exception was never retrieved" warnings
+                                task.exception()
                             except Exception:
                                 pass
 
-                    self.console.print("✅ Cleanup completed")
-            except Exception as cleanup_error:
-                self.console.print(f"⚠️  Error during task cleanup: {cleanup_error}")
+            except Exception:
+                # Suppress cleanup errors to avoid cluttering output
+                pass
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -420,16 +635,16 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination"
-  ez-mcp-eval --prompt "Summarize this text" --dataset "summarization-dataset" --metric "LevenshteinRatio" --experiment-name "summarization-test"
-  ez-mcp-eval --prompt "Translate to French" --dataset "translation-dataset" --metric "Hallucination,LevenshteinRatio" --opik local
-  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --input "question" --output "reference=answer"
-  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'
-  ez-mcp-eval --prompt "Answer the question" --dataset "large-dataset" --metric "LevenshteinRatio" --num 100
+  ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination" --metrics-file "my_metrics.py"
+  ez-mcp-eval --prompt "Summarize this text" --dataset "summarization-dataset" --metric "LevenshteinRatio" --metrics-file "my_metrics.py" --experiment-name "summarization-test"
+  ez-mcp-eval --prompt "Translate to French" --dataset "translation-dataset" --metric "Hallucination,LevenshteinRatio" --metrics-file "my_metrics.py" --opik local
+  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --metrics-file "my_metrics.py" --input "question" --output "reference=answer"
+  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --metrics-file "my_metrics.py" --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'
+  ez-mcp-eval --prompt "Answer the question" --dataset "large-dataset" --metric "LevenshteinRatio" --metrics-file "my_metrics.py" --num 100
   ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metrics-file "my_metrics.py"
-  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --tools-file "my_tools.py"
-  ez-mcp-eval --list-metrics
+  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --metrics-file "my_metrics.py" --tools-file "my_tools.py"
   ez-mcp-eval --list-metrics --metrics-file "my_metrics.py"
+  ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio"
         """,
     )
 
@@ -444,7 +659,9 @@ Examples:
 
     parser.add_argument(
         "--metrics-file",
-        help="Path to a Python file containing metric definitions. If provided, metrics will be loaded from this file instead of opik.evaluation.metrics",
+        type=str,
+        required=False,
+        help="Path to a Python file containing metric definitions. If not provided, metrics will be loaded from opik.evaluation.metrics.",
     )
 
     parser.add_argument(
@@ -547,53 +764,197 @@ def parse_output_mapping(mapping_str: str) -> tuple[str, str]:
     return reference.strip(), dataset_field.strip()
 
 
+def get_sample_dataset_item(dataset: Any) -> Optional[Dict[str, Any]]:
+    """Get a sample item from a dataset to inspect available fields.
+
+    Works with:
+    - Opik Dataset objects (by iterating)
+    - Regular iterable datasets
+    - Lists/dicts
+
+    Returns:
+        A dictionary representing one dataset item, or None if unable to extract.
+    """
+    if not dataset:
+        return None
+
+    try:
+        # Try iteration first (works for Opik datasets and most iterables)
+        try:
+            # Create iterator and get first item
+            iterator = iter(dataset)
+            first_item = next(iterator)
+            if isinstance(first_item, dict):
+                return first_item
+        except (StopIteration, TypeError, AttributeError):
+            pass
+
+        # Try direct indexing
+        if hasattr(dataset, "__getitem__"):
+            try:
+                first_item = dataset[0]
+                if isinstance(first_item, dict):
+                    return first_item
+            except (IndexError, KeyError, TypeError):
+                pass
+
+        # If dataset itself is a dict, return it
+        if isinstance(dataset, dict):
+            return dataset
+
+    except Exception:
+        # If any error occurs, return None
+        pass
+
+    return None
+
+
+def get_available_dataset_fields(dataset: Any) -> List[str]:
+    """Get list of available field names from a dataset.
+
+    Returns:
+        List of field names, or empty list if unable to determine.
+    """
+    sample_item = get_sample_dataset_item(dataset)
+    if sample_item and isinstance(sample_item, dict):
+        return list(sample_item.keys())
+    return []
+
+
+def validate_field_values(
+    dataset: Any,
+    input_field: str,
+    reference_field: str,
+    console: Console,
+) -> None:
+    """Validate that input and reference fields have non-empty values in dataset items."""
+    if not dataset:
+        return
+
+    try:
+        empty_input_items = []
+        empty_reference_items = []
+        items_checked = 0
+        max_check = 10  # Check first 10 items
+
+        # Try to iterate through dataset items
+        try:
+            iterator = iter(dataset)
+            for item in iterator:
+                items_checked += 1
+                if items_checked > max_check:
+                    break
+
+                if not isinstance(item, dict):
+                    continue
+
+                # Check input field
+                input_value = item.get(input_field)
+                if input_value is None or (
+                    isinstance(input_value, str) and not input_value.strip()
+                ):
+                    empty_input_items.append(items_checked)
+
+                # Check reference field
+                ref_value = item.get(reference_field)
+                if ref_value is None or (
+                    isinstance(ref_value, str) and not ref_value.strip()
+                ):
+                    empty_reference_items.append(items_checked)
+
+        except (TypeError, AttributeError):
+            # Dataset is not directly iterable, skip validation
+            console.print("⚠️  Cannot iterate dataset - skipping value validation")
+            return
+
+        if empty_input_items or empty_reference_items:
+            error_parts = []
+            if empty_input_items:
+                error_parts.append(
+                    f"Input field '{input_field}' has empty/null values in items: {empty_input_items[:5]}"
+                    + (
+                        f" (and {len(empty_input_items) - 5} more)"
+                        if len(empty_input_items) > 5
+                        else ""
+                    )
+                )
+            if empty_reference_items:
+                error_parts.append(
+                    f"Reference field '{reference_field}' has empty/null values in items: {empty_reference_items[:5]}"
+                    + (
+                        f" (and {len(empty_reference_items) - 5} more)"
+                        if len(empty_reference_items) > 5
+                        else ""
+                    )
+                )
+
+            console.print("\n❌ Dataset validation failed:")
+            for part in error_parts:
+                console.print(f"   {part}")
+            console.print(
+                "\n   💡 Dataset fields must have non-empty values. Please check and fix corrupted dataset entries."
+            )
+            raise ValueError(
+                f"Dataset contains empty/null values: {', '.join(error_parts)}"
+            )
+
+    except ValueError:
+        # Re-raise ValueError (our validation errors)
+        raise
+    except Exception as e:
+        console.print(f"⚠️  Could not validate field values: {e}")
+        # Don't fail validation if we can't check values
+
+
 def validate_input_field(dataset: Any, input_field: str, console: Console) -> None:
     """Validate that the input field exists in the dataset items."""
     if not dataset:
         console.print("❌ Dataset is empty, cannot validate input field")
-        return
+        raise ValueError("Dataset is empty, cannot validate input field")
 
-    # Try to get the first item to check fields
+    # Try to get a sample item to check fields
     try:
-        # Check if this is an Opik Dataset object (not directly iterable)
-        if hasattr(dataset, "__class__") and "Dataset" in str(dataset.__class__):
-            console.print("⚠️  Opik Dataset object detected - skipping field validation")
-            console.print("   Field validation will be performed during evaluation")
-            return
-
-        # For regular iterable datasets, try to get the first item
-        first_item = None
-        try:
-            for item in dataset:
-                first_item = item
-                break
-        except TypeError:
-            # If dataset is not iterable, skip validation
-            console.print(
-                "⚠️  Dataset is not directly iterable - skipping field validation"
-            )
-            console.print("   Field validation will be performed during evaluation")
-            return
+        first_item = get_sample_dataset_item(dataset)
 
         if first_item is None:
-            console.print("❌ Dataset is empty, cannot validate input field")
+            console.print(
+                "⚠️  Cannot inspect dataset structure - skipping field validation"
+            )
+            console.print("   Field validation will be performed during evaluation")
             return
 
-        if not isinstance(first_item, dict):
-            console.print(
-                "❌ Dataset items are not dictionaries, cannot validate input field"
-            )
-            return
+        # first_item is guaranteed to be Dict[str, Any] here due to get_sample_dataset_item return type
+        # Use assert for runtime safety - mypy understands this better than isinstance check
+        assert isinstance(first_item, dict), "Dataset items must be dictionaries"
 
         if input_field not in first_item:
             available_fields = list(first_item.keys())
-            console.print(f"❌ Input field '{input_field}' not found in dataset items")
+            console.print(f"\n❌ Input field '{input_field}' not found in dataset")
             console.print(f"   Available fields: {', '.join(available_fields)}")
-            raise ValueError(f"Input field '{input_field}' not found in dataset")
 
+            # Suggest similar field names
+            suggestions = [
+                f
+                for f in available_fields
+                if input_field.lower() in f.lower() or f.lower() in input_field.lower()
+            ]
+            if suggestions:
+                console.print(f"   💡 Did you mean one of: {', '.join(suggestions)}?")
+
+            console.print(
+                f"\n   Example usage: --input {available_fields[0] if available_fields else 'FIELD_NAME'}"
+            )
+            raise ValueError(
+                f"Input field '{input_field}' not found in dataset. Available fields: {', '.join(available_fields)}"
+            )
+
+    except ValueError:
+        # Re-raise ValueError (our validation errors)
+        raise
     except Exception as e:
-        console.print(f"❌ Error accessing dataset items: {e}")
-        raise ValueError(f"Could not validate input field: {e}")
+        console.print(f"⚠️  Could not validate input field: {e}")
+        console.print("   Field validation will be performed during evaluation")
+        # Don't fail validation if we can't inspect the dataset
 
 
 def validate_output_mapping(
@@ -606,52 +967,67 @@ def validate_output_mapping(
     """Validate that the output mapping is correct."""
     if not dataset:
         console.print("❌ Dataset is empty, cannot validate output mapping")
-        return
+        raise ValueError("Dataset is empty, cannot validate output mapping")
 
-    # Try to get the first item to check fields
+    # Try to get a sample item to check fields
     try:
-        # Check if this is an Opik Dataset object (not directly iterable)
-        if hasattr(dataset, "__class__") and "Dataset" in str(dataset.__class__):
-            console.print(
-                "⚠️  Opik Dataset object detected - skipping dataset field validation"
-            )
-            console.print(
-                "   Dataset field validation will be performed during evaluation"
-            )
+        first_item = get_sample_dataset_item(dataset)
+
+        if first_item is not None and isinstance(first_item, dict):
+            # Check that reference_field exists in dataset
+            if reference_field not in first_item:
+                available_fields = list(first_item.keys())
+                console.print(
+                    f"\n❌ Reference field '{reference_field}' not found in dataset"
+                )
+                console.print(f"   Available fields: {', '.join(available_fields)}")
+
+                # Suggest similar field names
+                suggestions = [
+                    f
+                    for f in available_fields
+                    if reference_field.lower() in f.lower()
+                    or f.lower() in reference_field.lower()
+                ]
+                if suggestions:
+                    console.print(
+                        f"   💡 Did you mean one of: {', '.join(suggestions)}?"
+                    )
+
+                # Suggest a command fix
+                if available_fields:
+                    # Try to find a field that looks like a reference/answer
+                    likely_fields = [
+                        f
+                        for f in available_fields
+                        if any(
+                            x in f.lower()
+                            for x in [
+                                "answer",
+                                "reference",
+                                "expected",
+                                "output",
+                                "target",
+                                "label",
+                            ]
+                        )
+                    ]
+                    suggested_field = (
+                        likely_fields[0] if likely_fields else available_fields[0]
+                    )
+                    console.print(
+                        f"\n   Example usage: --output {output_ref}={suggested_field}"
+                    )
+
+                raise ValueError(
+                    f"Reference field '{reference_field}' not found in dataset. Available fields: {', '.join(available_fields)}"
+                )
         else:
-            # For regular iterable datasets, try to get the first item
-            first_item = None
-            try:
-                for item in dataset:
-                    first_item = item
-                    break
-            except TypeError:
-                # If dataset is not iterable, skip dataset field validation
-                console.print(
-                    "⚠️  Dataset is not directly iterable - skipping dataset field validation"
-                )
-                console.print(
-                    "   Dataset field validation will be performed during evaluation"
-                )
-                first_item = None
-
-            if first_item is not None:
-                if not isinstance(first_item, dict):
-                    console.print(
-                        "❌ Dataset items are not dictionaries, cannot validate output mapping"
-                    )
-                    return
-
-                # Check that reference_field exists in dataset
-                if reference_field not in first_item:
-                    available_fields = list(first_item.keys())
-                    console.print(
-                        f"❌ Reference field '{reference_field}' not found in dataset items"
-                    )
-                    console.print(f"   Available fields: {', '.join(available_fields)}")
-                    raise ValueError(
-                        f"Reference field '{reference_field}' not found in dataset"
-                    )
+            # Can't inspect dataset structure, but we'll still validate metrics
+            console.print(
+                "⚠️  Cannot inspect dataset structure - skipping field validation"
+            )
+            console.print("   Field validation will be performed during evaluation")
 
         # Always validate metric parameters regardless of dataset type
         for metric in metrics:
@@ -680,13 +1056,31 @@ def validate_output_mapping(
                 # The output_ref should match one of the metric's parameters
                 if output_ref not in param_names:
                     console.print(
-                        f"⚠️  Output reference '{output_ref}' is not a valid parameter for metric '{metric.__class__.__name__}' score method"
+                        f"\n❌ Output reference '{output_ref}' is not a valid parameter for metric '{metric.__class__.__name__}'"
                     )
-                    console.print(f"   Available parameters: {', '.join(param_names)}")
                     console.print(
-                        "   This may cause issues during evaluation, but continuing..."
+                        f"   Available metric parameters: {', '.join(param_names)}"
                     )
-                    # Don't raise an error, just warn and continue
+
+                    # Suggest the correct parameter name
+                    if param_names:
+                        likely_params = [
+                            p
+                            for p in param_names
+                            if "ref" in p.lower()
+                            or "expected" in p.lower()
+                            or "target" in p.lower()
+                        ]
+                        if likely_params:
+                            console.print(f"   💡 Did you mean: {likely_params[0]}?")
+                            console.print(
+                                f"\n   Example usage: --output {likely_params[0]}=FIELD_NAME"
+                            )
+
+                    raise ValueError(
+                        f"Output reference '{output_ref}' is not a valid parameter for metric '{metric.__class__.__name__}'. "
+                        f"Available parameters: {', '.join(param_names)}"
+                    )
             except ValueError:
                 # Re-raise ValueError from our validation
                 raise
@@ -696,19 +1090,13 @@ def validate_output_mapping(
                 )
                 # Continue with other metrics
 
+    except ValueError:
+        # Re-raise ValueError (our validation errors)
+        raise
     except Exception as e:
-        console.print(f"❌ Error accessing dataset items: {e}")
-        raise ValueError(f"Could not validate output mapping: {e}")
-
-
-def list_available_metrics() -> List[str]:
-    """List all available metrics from opik.evaluation.metrics."""
-    available_metrics = [
-        name
-        for name in dir(opik_metrics)
-        if not name.startswith("_") and callable(getattr(opik_metrics, name))
-    ]
-    return sorted(available_metrics)
+        console.print(f"⚠️  Could not validate output mapping: {e}")
+        console.print("   Field validation will be performed during evaluation")
+        # Don't fail validation if we can't inspect the dataset
 
 
 def main() -> None:
@@ -719,8 +1107,8 @@ def main() -> None:
     if args.list_metrics:
         console = Console()
 
-        # Load metrics from file if specified
         if args.metrics_file:
+            # List metrics from the metrics file
             try:
                 # Load the module from file
                 spec = importlib.util.spec_from_file_location(
@@ -746,8 +1134,12 @@ def main() -> None:
                 )
                 sys.exit(1)
         else:
+            # List metrics from opik.evaluation.metrics
+            from opik.evaluation import metrics as opik_metrics
+            from .utils import _list_available_metrics_from_module
+
             console.print("📊 Available metrics from opik.evaluation.metrics:")
-            available_metrics = list_available_metrics()
+            available_metrics = _list_available_metrics_from_module(opik_metrics)
 
         for metric in available_metrics:
             console.print(f"   - {metric}")
@@ -843,9 +1235,19 @@ def main() -> None:
         except asyncio.CancelledError:
             # Handle cancellation gracefully
             print("⚠️  Evaluation was cancelled")
+            sys.exit(1)
+        except (FieldMappingError, ValueError):
+            # These exceptions already have clear error messages printed
+            # Exit cleanly without printing traceback
+            sys.exit(1)
         except Exception as e:
+            # For other exceptions, print error message
             print(f"❌ Evaluation failed: {e}")
-            raise
+            if evaluator.config.debug:
+                import traceback
+
+                traceback.print_exc()
+            sys.exit(1)
         finally:
             # Properly clean up LiteLLM async clients first
             try:
