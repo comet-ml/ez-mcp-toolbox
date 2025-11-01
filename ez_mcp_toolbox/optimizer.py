@@ -9,6 +9,7 @@ using Opik's optimization framework.
 import argparse
 import asyncio
 import json
+import os
 import sys
 import signal
 import importlib.util
@@ -102,10 +103,43 @@ class MCPOptimizer(MCPChatbot):
                 # Store the original completion function
                 self._original_completion = litellm.completion
 
-                # Create a manually tracked version
+                # Create a manually tracked version that also attaches mermaid diagram
+                # Note: _mermaid_diagram will be set later in run_optimization
                 @track(name="llm_completion", type="llm")
                 def manually_tracked_completion(*args, **kwargs):
                     """Manually tracked version of litellm.completion"""
+                    # Attach mermaid diagram to the trace created by this LLM call
+                    # The trace is created by @track, then we attach metadata
+                    if hasattr(self, "_mermaid_diagram") and self._mermaid_diagram:
+                        try:
+                            from opik import opik_context
+
+                            existing_metadata = {}
+                            try:
+                                current_trace = opik_context.get_current_trace()
+                                if (
+                                    current_trace
+                                    and hasattr(current_trace, "metadata")
+                                    and current_trace.metadata
+                                ):
+                                    existing_metadata = (
+                                        current_trace.metadata.copy()
+                                        if isinstance(current_trace.metadata, dict)
+                                        else {}
+                                    )
+                            except Exception:
+                                pass
+
+                            existing_metadata["_opik_graph_definition"] = {
+                                "format": "mermaid",
+                                "data": self._mermaid_diagram,
+                            }
+                            opik_context.update_current_trace(
+                                metadata=existing_metadata
+                            )
+                        except Exception:
+                            pass
+
                     return self._original_completion(*args, **kwargs)
 
                 # Replace with our manually tracked version
@@ -196,8 +230,14 @@ class MCPOptimizer(MCPChatbot):
             # Clear messages before optimization to prevent context window overflow
             self.clear_messages()
 
-            # Generate and attach mermaid diagram to trace metadata
+            # Generate mermaid diagram once at the start
             mermaid_diagram = await generate_mcp_mermaid_diagram(self.mcp_manager)
+
+            # Store mermaid diagram as instance variable for use in manually_tracked_completion
+            self._mermaid_diagram = mermaid_diagram
+
+            # Attach mermaid diagram to trace metadata
+            # Do this after @track decorator has initialized the trace
             if mermaid_diagram:
                 try:
                     from opik import opik_context
@@ -216,8 +256,9 @@ class MCPOptimizer(MCPChatbot):
                                 if isinstance(current_trace.metadata, dict)
                                 else {}
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if self.config.debug:
+                            self.console.print(f"⚠️  Could not get current trace: {e}")
 
                     # Set _opik_graph_definition within metadata
                     existing_metadata["_opik_graph_definition"] = {
@@ -225,8 +266,15 @@ class MCPOptimizer(MCPChatbot):
                         "data": mermaid_diagram,
                     }
                     opik_context.update_current_trace(metadata=existing_metadata)
-                except Exception:
+
+                    if self.config.debug:
+                        self.console.print(
+                            f"✅ Attached mermaid diagram to trace metadata ({len(mermaid_diagram)} chars)"
+                        )
+                except Exception as e:
                     # Opik not available, continue without tracing
+                    if self.config.debug:
+                        self.console.print(f"⚠️  Failed to attach mermaid diagram: {e}")
                     pass
 
             self.console.print("🚀 Starting optimization...")
@@ -374,6 +422,55 @@ class MCPOptimizer(MCPChatbot):
             # Wrap the metric function to handle message clearing and feedback logging
             # The metric function should take (dataset_item, llm_output) as parameters
             def optimizer_metric(dataset_item, llm_output):
+                # Attach mermaid diagram to the current trace (each evaluation gets its own trace)
+                # This is called for each evaluation, and each gets its own trace
+                if mermaid_diagram:
+                    try:
+                        from opik import opik_context
+
+                        # Get the current trace - this should be the evaluation task trace
+                        current_trace = None
+                        existing_metadata = {}
+                        try:
+                            current_trace = opik_context.get_current_trace()
+                            if current_trace:
+                                if self.config.debug:
+                                    self.console.print(
+                                        f"🔍 Found trace in optimizer_metric: {type(current_trace)}"
+                                    )
+                                if (
+                                    hasattr(current_trace, "metadata")
+                                    and current_trace.metadata
+                                ):
+                                    existing_metadata = (
+                                        current_trace.metadata.copy()
+                                        if isinstance(current_trace.metadata, dict)
+                                        else {}
+                                    )
+                        except Exception as e:
+                            if self.config.debug:
+                                self.console.print(
+                                    f"⚠️  Error getting trace in optimizer_metric: {e}"
+                                )
+
+                        # Set _opik_graph_definition within metadata
+                        existing_metadata["_opik_graph_definition"] = {
+                            "format": "mermaid",
+                            "data": mermaid_diagram,
+                        }
+                        opik_context.update_current_trace(metadata=existing_metadata)
+
+                        if self.config.debug and current_trace:
+                            self.console.print(
+                                f"✅ Attached mermaid diagram to evaluation trace ({len(mermaid_diagram)} chars)"
+                            )
+                    except Exception as e:
+                        if self.config.debug:
+                            self.console.print(
+                                f"⚠️  Failed to attach mermaid in optimizer_metric: {e}"
+                            )
+                        pass
+
                 # Clear messages before each metric evaluation to prevent context window overflow
                 # This is the same approach used in the evaluator
                 self.clear_messages()
@@ -486,6 +583,41 @@ class MCPOptimizer(MCPChatbot):
             optimize_kwargs.update(user_optimize_kwargs)
 
             eval_results = optimizer.optimize_prompt(**optimize_kwargs)
+
+            # Update metadata again after optimize_prompt in case it created a new trace context
+            if mermaid_diagram:
+                try:
+                    from opik import opik_context
+
+                    existing_metadata = {}
+                    try:
+                        current_trace = opik_context.get_current_trace()
+                        if (
+                            current_trace
+                            and hasattr(current_trace, "metadata")
+                            and current_trace.metadata
+                        ):
+                            existing_metadata = (
+                                current_trace.metadata.copy()
+                                if isinstance(current_trace.metadata, dict)
+                                else {}
+                            )
+                    except Exception:
+                        pass
+
+                    # Set _opik_graph_definition within metadata
+                    existing_metadata["_opik_graph_definition"] = {
+                        "format": "mermaid",
+                        "data": mermaid_diagram,
+                    }
+                    opik_context.update_current_trace(metadata=existing_metadata)
+
+                    if self.config.debug:
+                        self.console.print(
+                            "✅ Re-attached mermaid diagram after optimize_prompt"
+                        )
+                except Exception:
+                    pass
 
             self.console.print("✅ Optimization completed!")
 
@@ -799,9 +931,9 @@ Examples:
         choices=[
             "EvolutionaryOptimizer",
             "FewShotBayesianOptimizer",
-            "MetaPromptOptimizer",
             "GepaOptimizer",
-            "MiproOptimizer",
+            "HierarchicalReflectiveOptimizer",
+            "MetaPromptOptimizer",
         ],
         default="EvolutionaryOptimizer",
         help="Optimizer class to use for optimization (default: EvolutionaryOptimizer)",
@@ -871,21 +1003,26 @@ def main() -> None:
         if not interrupted:
             interrupted = True
             print("\n⚠️  Interrupt received, shutting down gracefully...")
+
             # Cancel the main task if we have a reference to it
             task_to_cancel = main_task_ref
             if task_to_cancel is not None and not task_to_cancel.done():
                 task_to_cancel.cancel()
-            # Also try to cancel tasks in the current event loop if it exists
+
+            # Try to interrupt the event loop if it's running
             try:
                 loop = asyncio.get_running_loop()
-                # Cancel all tasks except the one calling this handler
-                current_task = asyncio.current_task(loop)
+                # Cancel all tasks - this should cause run_until_complete to exit
                 for task in asyncio.all_tasks(loop):
-                    if task != current_task and not task.done():
+                    if not task.done():
                         task.cancel()
             except RuntimeError:
-                # No event loop running, that's fine - KeyboardInterrupt will be raised
+                # No event loop running
                 pass
+        else:
+            # Second interrupt - forcefully terminate
+            print("\n⚠️  Second interrupt received, forcefully terminating...")
+            os._exit(130)
 
     # Register signal handlers
     signal.signal(signal.SIGINT, signal_handler)
