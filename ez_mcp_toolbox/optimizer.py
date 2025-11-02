@@ -19,9 +19,10 @@ from dataclasses import dataclass
 
 from opik_optimizer.optimization_config.chat_prompt import ChatPrompt
 from opik.evaluation import metrics as opik_metrics
-from opik import track
+from opik import track, opik_context
 from rich.console import Console
 from dotenv import load_dotenv
+import litellm
 
 from .utils import (
     configure_opik,
@@ -29,6 +30,7 @@ from .utils import (
     resolve_prompt_with_opik,
     load_metrics_by_names_for_optimizer,
     generate_mcp_mermaid_diagram,
+    update_opik_span_and_trace_with_usage,
 )
 from .chatbot import MCPChatbot
 
@@ -97,9 +99,6 @@ class MCPOptimizer(MCPChatbot):
         # Configure manual logging for litellm.completion calls
         if self.config.opik_mode != "disabled":
             try:
-                import litellm
-                from opik import track
-
                 # Store the original completion function
                 self._original_completion = litellm.completion
 
@@ -108,39 +107,49 @@ class MCPOptimizer(MCPChatbot):
                 @track(name="llm_completion", type="llm")
                 def manually_tracked_completion(*args, **kwargs):
                     """Manually tracked version of litellm.completion"""
-                    # Attach mermaid diagram to the trace created by this LLM call
-                    # The trace is created by @track, then we attach metadata
-                    if hasattr(self, "_mermaid_diagram") and self._mermaid_diagram:
-                        try:
-                            from opik import opik_context
+                    # Call the original completion first
+                    resp = self._original_completion(*args, **kwargs)
 
-                            existing_metadata = {}
+                    # Extract model from args/kwargs
+                    model = kwargs.get("model") or (args[0] if args else None)
+
+                    try:
+                        # Add mermaid diagram to trace metadata if available
+                        if hasattr(self, "_mermaid_diagram") and self._mermaid_diagram:
                             try:
-                                current_trace = opik_context.get_current_trace()
-                                if (
-                                    current_trace
-                                    and hasattr(current_trace, "metadata")
-                                    and current_trace.metadata
-                                ):
-                                    existing_metadata = (
-                                        current_trace.metadata.copy()
-                                        if isinstance(current_trace.metadata, dict)
-                                        else {}
-                                    )
+                                existing_metadata = {}
+                                try:
+                                    current_trace = opik_context.get_current_trace()
+                                    if (
+                                        current_trace
+                                        and hasattr(current_trace, "metadata")
+                                        and current_trace.metadata
+                                    ):
+                                        existing_metadata = (
+                                            current_trace.metadata.copy()
+                                            if isinstance(current_trace.metadata, dict)
+                                            else {}
+                                        )
+                                except Exception:
+                                    pass
+
+                                existing_metadata["_opik_graph_definition"] = {
+                                    "format": "mermaid",
+                                    "data": self._mermaid_diagram,
+                                }
+                                opik_context.update_current_trace(
+                                    metadata=existing_metadata
+                                )
                             except Exception:
                                 pass
 
-                            existing_metadata["_opik_graph_definition"] = {
-                                "format": "mermaid",
-                                "data": self._mermaid_diagram,
-                            }
-                            opik_context.update_current_trace(
-                                metadata=existing_metadata
-                            )
-                        except Exception:
-                            pass
+                        # Extract token counts and update span with usage information
+                        if resp and model:
+                            update_opik_span_and_trace_with_usage(model, resp)
+                    except Exception:
+                        pass
 
-                    return self._original_completion(*args, **kwargs)
+                    return resp
 
                 # Replace with our manually tracked version
                 litellm.completion = manually_tracked_completion
@@ -720,8 +729,6 @@ class MCPOptimizer(MCPChatbot):
             # Restore original litellm.completion if we patched it
             if hasattr(self, "_original_completion"):
                 try:
-                    import litellm
-
                     litellm.completion = self._original_completion
                     self.console.print("✅ Restored original litellm.completion")
                 except Exception as e:

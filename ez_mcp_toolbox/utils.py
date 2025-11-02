@@ -17,9 +17,11 @@ from typing import Any, Dict, List, Callable, Optional, Union
 
 from mcp import Tool
 from rich.console import Console
-from opik import track, Opik
+from opik import track, Opik, opik_context
 from opik.evaluation import metrics as opik_metrics
 import opik
+import litellm
+from litellm.utils import get_llm_provider
 
 # Suppress litellm RuntimeWarning about coroutines never awaited
 warnings.filterwarnings(
@@ -30,6 +32,152 @@ warnings.filterwarnings(
 warnings.filterwarnings(
     "ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*"
 )
+
+# Configure litellm to drop params
+litellm.drop_params = True
+
+
+def extract_provider_from_model(model: str) -> tuple[Optional[str], str]:
+    """
+    Extract provider name from model string and return normalized model name.
+
+    Handles formats like:
+    - "openai/gpt-5-nano" -> ("openai", "gpt-5-nano")
+    - "gpt-3.5-turbo" -> (None or provider from litellm, "gpt-3.5-turbo")
+    - "anthropic/claude-3-opus" -> ("anthropic", "claude-3-opus")
+
+    Args:
+        model: Model string that may contain provider prefix
+
+    Returns:
+        Tuple of (provider_name, normalized_model_name)
+    """
+    if not model:
+        return None, model
+
+    # Check if model string has provider prefix (format: "provider/model-name")
+    if "/" in model:
+        provider_part, model_part = model.split("/", 1)
+        provider_part = provider_part.strip()
+        model_part = model_part.strip()
+        # Common provider names (normalize to lowercase)
+        provider_lower = provider_part.lower()
+        known_providers = {
+            "openai",
+            "anthropic",
+            "google",
+            "cohere",
+            "mistral",
+            "azure",
+            "bedrock",
+            "vertex",
+            "together",
+            "replicate",
+            "huggingface",
+            "ollama",
+            "groq",
+            "deepinfra",
+            "anyscale",
+            "perplexity",
+            "voyage",
+            "nvidia",
+            "cloudflare",
+            "cerebras",
+            "predibase",
+        }
+        if provider_lower in known_providers:
+            return provider_lower, model_part
+
+    # Try using litellm's get_llm_provider function
+    provider = None
+    try:
+        _, provider, _ = get_llm_provider(model=model)
+        if provider:
+            provider = provider.lower() if isinstance(provider, str) else None
+    except Exception:
+        pass
+
+    return provider, model
+
+
+def update_opik_span_and_trace_with_usage(model: str, resp: Any) -> None:
+    """
+    Extract token counts and usage information from LLM response and update Opik span and trace.
+
+    This function:
+    1. Extracts provider and normalizes model name
+    2. Extracts token counts (prompt_tokens, completion_tokens, total_tokens) from response
+    3. Updates the current span with provider, model, and usage
+    4. Updates trace metadata with provider and model (usage is aggregated by Opik)
+
+    Args:
+        model: Model string (may contain provider prefix like "openai/gpt-5-nano")
+        resp: LLM response object from litellm.completion()
+    """
+    try:
+        # Extract provider from model string (with fallback parsing) and normalize model name
+        provider, normalized_model = extract_provider_from_model(model)
+
+        # Extract token counts from response
+        usage_dict = {}
+        if hasattr(resp, "usage") and resp.usage:
+            prompt_tokens = getattr(resp.usage, "prompt_tokens", None)
+            completion_tokens = getattr(resp.usage, "completion_tokens", None)
+            total_tokens = getattr(resp.usage, "total_tokens", None)
+
+            if prompt_tokens is not None:
+                usage_dict["prompt_tokens"] = prompt_tokens
+            if completion_tokens is not None:
+                usage_dict["completion_tokens"] = completion_tokens
+            if total_tokens is not None:
+                usage_dict["total_tokens"] = total_tokens
+
+        # Update span with provider, model, and usage information
+        # Always include provider if available, and always include usage if present
+        if usage_dict:
+            update_kwargs = {
+                "model": normalized_model,  # Use normalized model (without provider prefix)
+                "usage": usage_dict,
+            }
+            # Always set provider if we could determine it (required for cost estimation)
+            if provider:
+                update_kwargs["provider"] = provider
+
+            try:
+                opik_context.update_current_span(**update_kwargs)
+
+                # Also update trace metadata with provider and model for cost estimation
+                # Note: Usage is aggregated automatically by Opik from spans, we just need provider/model
+                try:
+                    # Get existing metadata from trace data - always fetch fresh to avoid overwriting
+                    existing_metadata = {}
+                    try:
+                        trace_data = opik_context.get_current_trace_data()
+                        if trace_data and isinstance(trace_data, dict):
+                            metadata = trace_data.get("metadata")
+                            if isinstance(metadata, dict):
+                                existing_metadata = metadata.copy()
+                            else:
+                                existing_metadata = {}
+                    except Exception:
+                        pass
+
+                    # Add provider and model to metadata if available (preserve existing metadata)
+                    if provider:
+                        existing_metadata["provider"] = provider
+                    if normalized_model:
+                        existing_metadata["model"] = normalized_model
+
+                    # Update trace metadata with provider and model
+                    # Usage will be aggregated automatically by Opik from spans
+                    if provider or normalized_model:
+                        opik_context.update_current_trace(metadata=existing_metadata)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 class ToolRegistry:
@@ -671,6 +819,9 @@ def call_llm_with_tracing(
                 console.print(f"✅ LLM response has {len(resp.choices)} choices")
             else:
                 print(f"✅ LLM response has {len(resp.choices)} choices")
+
+        # Extract token counts and update span with usage information
+        update_opik_span_and_trace_with_usage(model, resp)
 
         return resp
 
