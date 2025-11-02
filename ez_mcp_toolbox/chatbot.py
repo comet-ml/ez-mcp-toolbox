@@ -1186,7 +1186,14 @@ class MCPChatbot:
                 # Display bot response with Rich markdown formatting
                 if a:
                     self.console.print("\n[bold blue]Assistant:[/bold blue]")
-                    self.console.print(Markdown(a))
+                    # Check if text should preserve formatting (ASCII art, preformatted text, etc.)
+                    if self._should_preserve_formatting(a):
+                        # Display as plain text to preserve exact formatting
+                        # Print directly without Markdown to preserve all newlines and spacing
+                        self.console.print(a)
+                    else:
+                        # Use Markdown formatting for regular text
+                        self.console.print(Markdown(a))
                 else:
                     self.console.print("[dim]Assistant: (no reply)[/dim]")
                 self.console.print()  # Add spacing between exchanges
@@ -1196,6 +1203,14 @@ class MCPChatbot:
 
     async def close(self) -> None:
         await self.mcp_manager.close()
+
+    def _should_preserve_formatting(self, text: str) -> bool:
+        """Check if text should be displayed with preserved formatting (e.g., ASCII art).
+
+        Simply checks for double newlines, which indicate intentional paragraph breaks
+        that should be preserved rather than collapsed by Markdown.
+        """
+        return "\n\n" in text if text else False
 
     async def _handle_show_tools(self, server_name: Optional[str] = None) -> None:
         """Handle /show tools and /show tools NAME commands."""
