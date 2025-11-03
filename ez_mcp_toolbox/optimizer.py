@@ -799,7 +799,7 @@ class MCPOptimizer(MCPChatbot):
                             # Use a more robust approach to avoid recursion
                             done, pending = await asyncio.wait(
                                 other_tasks,
-                                timeout=2.0,
+                                timeout=30.0,
                                 return_when=asyncio.ALL_COMPLETED,
                             )
                             if pending:
@@ -1287,7 +1287,7 @@ def main() -> None:
                                 # Use a more robust approach to avoid recursion
                                 done, pending = await asyncio.wait(
                                     other_tasks,
-                                    timeout=2.0,
+                                    timeout=30.0,
                                     return_when=asyncio.ALL_COMPLETED,
                                 )
                                 if pending:
@@ -1408,7 +1408,7 @@ def main() -> None:
                                     # Use a more robust approach to avoid recursion
                                     done, pending = await asyncio.wait(
                                         other_tasks,
-                                        timeout=2.0,
+                                        timeout=30.0,
                                         return_when=asyncio.ALL_COMPLETED,
                                     )
                                     if pending:
