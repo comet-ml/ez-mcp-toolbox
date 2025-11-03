@@ -388,9 +388,9 @@ ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hall
 ```
 ez-mcp-eval [-h] [--prompt PROMPT] [--dataset DATASET] [--metric METRIC]
             [--metrics-file METRICS_FILE] [--experiment-name EXPERIMENT_NAME]
-            [--opik {local,hosted,disabled}] [--debug] [--input INPUT]
+            [--project-name PROJECT_NAME] [--opik {local,hosted,disabled}] [--debug] [--input INPUT]
             [--output OUTPUT] [--list-metrics] [--model MODEL]
-            [--model-kwargs MODEL_KWARGS] [--config CONFIG] [--tools-file TOOLS_FILE]
+            [--model-parameters MODEL_PARAMETERS] [--config CONFIG] [--tools-file TOOLS_FILE]
             [--num NUM]
 ```
 
@@ -403,14 +403,15 @@ ez-mcp-eval [-h] [--prompt PROMPT] [--dataset DATASET] [--metric METRIC]
 #### Optional Arguments
 
 - `--metrics-file METRICS_FILE` - Path to a Python file containing metric definitions (alternative to using opik.evaluation.metrics)
-- `--experiment-name EXPERIMENT_NAME` - Name for the evaluation experiment (default: ez-mcp-evaluation)
+- `--experiment-name EXPERIMENT_NAME` - Name for the evaluation experiment (default: ez-mcp-evaluation-experiment)
+- `--project-name PROJECT_NAME` - Name for the evaluation project (default: ez-mcp-evaluation-project)
 - `--opik {local,hosted,disabled}` - Opik tracing mode (default: hosted)
 - `--debug` - Enable debug output
 - `--input INPUT` - Input field name in the dataset (default: input)
 - `--output OUTPUT` - Output field mapping in format reference=DATASET_FIELD (default: reference=answer)
 - `--list-metrics` - List all available metrics and exit
 - `--model MODEL` - LLM model to use for evaluation (default: gpt-3.5-turbo)
-- `--model-kwargs MODEL_KWARGS` - JSON string of additional keyword arguments for the LLM model
+- `--model-parameters MODEL_PARAMETERS` - JSON string of additional keyword arguments to pass to the LLM model (e.g., '{"temperature": 0.7, "max_tokens": 1000}')
 - `--config CONFIG` - Path to MCP server configuration file (default: ez-config.json)
 - `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions, or URL to download the file from. If provided, will create an MCP server configuration using this file.
 - `--num NUM` - Number of items to evaluate from the dataset (takes first N items, default: all items)
@@ -447,7 +448,7 @@ ez-mcp-eval --prompt "Translate to French" --dataset "translation-dataset" --met
 #### Custom Model and Parameters
 ```bash
 # Use a different model with custom parameters
-ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model "gpt-4" --model-kwargs '{"temperature": 0.7, "max_tokens": 1000}'
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --model "gpt-4" --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'
 ```
 
 #### Using opik_optimizer Datasets
@@ -601,17 +602,17 @@ A command-line utility for optimizing LLM applications using Opik's optimization
 ### Basic Usage
 
 ```bash
-ez-mcp-optimize --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination"
+ez-mcp-optimize --prompt "Answer the question" --dataset "my-dataset" --metric "hallucination_function" --metrics-file "my_metrics.py"
 ```
 
 ### Command-line Options
 
 ```
 ez-mcp-optimize [-h] [--prompt PROMPT] [--dataset DATASET] [--metric METRIC]
-                [--metrics-file METRICS_FILE] [--experiment-name EXPERIMENT_NAME]
+                --metrics-file METRICS_FILE [--experiment-name EXPERIMENT_NAME]
                 [--opik {local,hosted,disabled}] [--debug] [--input INPUT]
                 [--output OUTPUT] [--list-metrics] [--model MODEL]
-                [--model-kwargs MODEL_KWARGS] [--config CONFIG] [--tools-file TOOLS_FILE]
+                [--model-parameters MODEL_PARAMETERS] [--config CONFIG] [--tools-file TOOLS_FILE]
                 [--num NUM] [--optimizer OPTIMIZER] [--class-kwargs CLASS_KWARGS]
                 [--optimize-kwargs OPTIMIZE_KWARGS]
 ```
@@ -621,10 +622,9 @@ ez-mcp-optimize [-h] [--prompt PROMPT] [--dataset DATASET] [--metric METRIC]
 - `--prompt PROMPT` - The prompt to use for optimization
 - `--dataset DATASET` - Name of the dataset to optimize on
 - `--metric METRIC` - Name of the metric(s) to use for optimization (comma-separated for multiple)
+- `--metrics-file METRICS_FILE` - Path to a Python file containing metric function definitions. The metric must be a Python function that takes (dataset_item, llm_output) as parameters. Required for optimizer.
 
 #### Optional Arguments
-
-- `--metrics-file METRICS_FILE` - Path to a Python file containing metric definitions (alternative to using opik.evaluation.metrics)
 - `--experiment-name EXPERIMENT_NAME` - Name for the optimization experiment (default: ez-mcp-optimization)
 - `--opik {local,hosted,disabled}` - Opik tracing mode (default: hosted)
 - `--debug` - Enable debug output
@@ -632,7 +632,7 @@ ez-mcp-optimize [-h] [--prompt PROMPT] [--dataset DATASET] [--metric METRIC]
 - `--output OUTPUT` - Output field mapping. Accepts 'REFERENCE=FIELD', 'REFERENCE:FIELD', or just 'FIELD'. If only FIELD is provided, it will be used as the ChatPrompt user field. (default: reference=answer)
 - `--list-metrics` - List all available metrics and exit
 - `--model MODEL` - LLM model to use for optimization (default: gpt-3.5-turbo)
-- `--model-kwargs MODEL_KWARGS` - JSON string of additional keyword arguments for the LLM model
+- `--model-parameters MODEL_PARAMETERS` - JSON string of additional keyword arguments to pass to the LLM model (e.g., '{"temperature": 0.7, "max_tokens": 1000}')
 - `--config CONFIG` - Path to MCP server configuration file (default: ez-config.json)
 - `--tools-file TOOLS_FILE` - Path to a Python file containing tool definitions, or URL to download the file from. If provided, will create an MCP server configuration using this file.
 - `--num NUM` - Number of items to optimize from the dataset (takes first N items, default: all items)
@@ -648,38 +648,44 @@ The tool supports various optimization algorithms:
 - **FewShotBayesianOptimizer**: Bayesian optimization with few-shot examples
 - **MetaPromptOptimizer**: Meta-learning based optimization
 - **GepaOptimizer**: Gradient-based optimization
-- **MiproOptimizer**: Multi-objective optimization
+- **HierarchicalReflectiveOptimizer**: Hierarchical reflection-based optimization
 
 ### Examples
 
 #### Basic Optimization
 ```bash
 # Simple optimization with Hallucination metric
-ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination"
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "hallucination_function" --metrics-file "my_metrics.py"
 ```
 
 #### Multiple Metrics
 ```bash
 # Optimize with multiple metrics
-ez-mcp-optimize --prompt "Summarize this text" --dataset "summarization-dataset" --metric "Hallucination,LevenshteinRatio"
+ez-mcp-optimize --prompt "Summarize this text" --dataset "summarization-dataset" --metric "hallucination_function,levenshtein_ratio_function" --metrics-file "my_metrics.py"
 ```
 
 #### Custom Optimizer
 ```bash
 # Use a different optimizer
-ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --optimizer "FewShotBayesianOptimizer"
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "levenshtein_ratio_function" --metrics-file "my_metrics.py" --optimizer "FewShotBayesianOptimizer"
+```
+
+#### Custom Model and Parameters
+```bash
+# Use a different model with custom parameters
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "levenshtein_ratio_function" --metrics-file "my_metrics.py" --model "gpt-4" --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'
 ```
 
 #### Custom Optimizer Parameters
 ```bash
 # Use custom optimizer parameters
-ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --class-kwargs '{"population_size": 50, "mutation_rate": 0.1}'
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "levenshtein_ratio_function" --metrics-file "my_metrics.py" --class-kwargs '{"population_size": 50, "mutation_rate": 0.1}'
 ```
 
 #### Custom Optimization Parameters
 ```bash
 # Use custom optimization parameters
-ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --optimize-kwargs '{"auto_continue": true, "n_samples": 100}'
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "levenshtein_ratio_function" --metrics-file "my_metrics.py" --optimize-kwargs '{"auto_continue": true, "n_samples": 100}'
 ```
 
 ### Opik Integration
