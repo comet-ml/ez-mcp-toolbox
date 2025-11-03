@@ -9,6 +9,7 @@ using Opik's evaluation framework.
 import argparse
 import asyncio
 import json
+import os
 import sys
 import importlib.util
 import warnings
@@ -706,8 +707,8 @@ Examples:
 
     parser.add_argument(
         "--model",
-        default="gpt-3.5-turbo",
-        help="LLM model to use for evaluation (default: gpt-3.5-turbo)",
+        default=None,
+        help="LLM model to use for evaluation (default: from config file or openai/gpt-3.5-turbo)",
     )
 
     parser.add_argument(
@@ -1166,6 +1167,20 @@ def main() -> None:
     input_field = args.input
     output_ref, reference_field = parse_output_mapping(args.output)
 
+    # Load model from config file if --model not provided, similar to chatbot behavior
+    config_path = args.config or "ez-config.json"
+    model_from_config = None
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                config_data = json.load(f)
+                model_from_config = config_data.get("model")
+    except Exception:
+        pass  # If config loading fails, use default
+
+    # Use args.model if provided, otherwise use model from config, otherwise use default
+    model_to_use = args.model or model_from_config or "openai/gpt-3.5-turbo"
+
     # Parse model parameters JSON (with backwards compatibility for model-kwargs)
     model_parameters = None
     if args.model_parameters and args.model_kwargs:
@@ -1211,7 +1226,7 @@ def main() -> None:
         reference_field=reference_field,
         output_field="llm_output",  # Task always returns {"llm_output": response}
         output_ref=output_ref,  # The metric's expected field name (e.g., "reference")
-        model=args.model,
+        model=model_to_use,
         model_parameters=model_parameters,
         config_path=args.config,
         tools_file=args.tools_file,

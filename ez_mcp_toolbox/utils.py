@@ -97,6 +97,19 @@ def extract_provider_from_model(model: str) -> tuple[Optional[str], str]:
     except Exception:
         pass
 
+    # Fallback: Map common model names to providers
+    if not provider:
+        model_lower = model.lower()
+        if model_lower.startswith("gpt") or "gpt" in model_lower:
+            provider = "openai"
+        elif model_lower.startswith("claude") or "claude" in model_lower:
+            provider = "anthropic"
+        elif model_lower.startswith("gemini") or "gemini" in model_lower:
+            provider = "google"
+        elif model_lower.startswith("llama") or "llama" in model_lower:
+            # Llama models could be from various providers, but default to meta if unsure
+            pass  # Keep as None since provider is unclear
+
     return provider, model
 
 
@@ -153,14 +166,25 @@ def update_opik_span_and_trace_with_usage(model: str, resp: Any) -> None:
                     existing_metadata = {}
                     try:
                         trace_data = opik_context.get_current_trace_data()
-                        if trace_data and isinstance(trace_data, dict):
-                            metadata = trace_data.get("metadata")
-                            if isinstance(metadata, dict):
-                                existing_metadata = metadata.copy()
-                            else:
-                                existing_metadata = {}
+
+                        # Handle TraceData object (not just dict)
+                        if trace_data:
+                            # Check if it's a dict
+                            if isinstance(trace_data, dict):
+                                metadata = trace_data.get("metadata")
+                                if isinstance(metadata, dict):
+                                    existing_metadata = metadata.copy()
+                                else:
+                                    existing_metadata = {}
+                            # Check if it's a TraceData object with metadata attribute
+                            elif hasattr(trace_data, "metadata"):
+                                metadata = getattr(trace_data, "metadata", None)
+                                if isinstance(metadata, dict):
+                                    existing_metadata = metadata.copy()
+                                else:
+                                    existing_metadata = {}
                     except Exception:
-                        pass
+                        existing_metadata = {}
 
                     # Add provider and model to metadata if available (preserve existing metadata)
                     if provider:
