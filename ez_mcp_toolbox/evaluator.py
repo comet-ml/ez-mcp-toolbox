@@ -193,7 +193,9 @@ class MCPEvaluator(MCPChatbot):
     def get_metrics(self) -> List[Any]:
         """Get metrics from either opik.evaluation.metrics OR --metrics-file.
 
-        Metrics should be classes with an instance method named 'score'.
+        Metrics can be either:
+        1. A class that when instantiated has a score() method requiring --output mapping
+        2. A function that takes (dataset_item, llm_output) as parameters
         """
         return load_metrics_by_names(
             self.config.metric, self.config.metrics_file, self.console
@@ -1037,6 +1039,11 @@ def validate_output_mapping(
             import inspect
 
             try:
+                # Skip validation for FunctionMetricAdapter (function metrics)
+                # They use **kwargs and don't need --output mapping
+                if metric.__class__.__name__ == "FunctionMetricAdapter":
+                    continue
+
                 # Try to find the score method
                 if hasattr(metric, "score"):
                     sig = inspect.signature(metric.score)
@@ -1053,6 +1060,16 @@ def validate_output_mapping(
                 # Remove 'self' parameter
                 if "self" in param_names:
                     param_names.remove("self")
+
+                # Check if this metric uses **kwargs (function-style, doesn't need --output)
+                # If so, skip validation since function metrics don't need --output mapping
+                has_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in sig.parameters.values()
+                )
+                if has_kwargs:
+                    # This is a function metric - skip validation
+                    continue
 
                 # Check if the metric expects the output_ref parameter
                 # The output_ref should match one of the metric's parameters

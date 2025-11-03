@@ -34,10 +34,10 @@ That will start a `ez-mcp-server` (using example tools below) and the `ez-mcp-ch
 
 ### Evaluate LLM Applications
 ```
-ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination"
+ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination" --output "reference=answer"
 ```
 
-This will evaluate your LLM application using Opik's evaluation framework with your dataset and chosen metrics.
+This will evaluate your LLM application using Opik's evaluation framework with your dataset and chosen metrics. The `--output` parameter is required for class metrics (like built-in Opik metrics) to map metric parameters to dataset fields.
 
 You can also limit the evaluation to the first N items of the dataset:
 
@@ -380,7 +380,11 @@ A command-line utility for evaluating LLM applications using Opik's evaluation f
 ### Basic Usage
 
 ```bash
-ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination"
+# Using built-in Opik metric (class metric - requires --output)
+ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination" --output "reference=answer"
+
+# Using function metric from file (no --output needed)
+ez-mcp-eval --prompt "Answer the question" --dataset "my-dataset" --metric "my_metric" --metrics-file "my_metrics.py"
 ```
 
 ### Command-line Options
@@ -402,13 +406,13 @@ ez-mcp-eval [-h] [--prompt PROMPT] [--dataset DATASET] [--metric METRIC]
 
 #### Optional Arguments
 
-- `--metrics-file METRICS_FILE` - Path to a Python file containing metric definitions (alternative to using opik.evaluation.metrics)
+- `--metrics-file METRICS_FILE` - Path to a Python file containing metric definitions. If not provided, metrics will be loaded from `opik.evaluation.metrics`. If a metric name exists in both, the metrics file takes precedence.
 - `--experiment-name EXPERIMENT_NAME` - Name for the evaluation experiment (default: ez-mcp-evaluation-experiment)
 - `--project-name PROJECT_NAME` - Name for the evaluation project (default: ez-mcp-evaluation-project)
 - `--opik {local,hosted,disabled}` - Opik tracing mode (default: hosted)
 - `--debug` - Enable debug output
 - `--input INPUT` - Input field name in the dataset (default: input)
-- `--output OUTPUT` - Output field mapping in format reference=DATASET_FIELD (default: reference=answer)
+- `--output OUTPUT` - Output field mapping in format reference=DATASET_FIELD (default: reference=answer). **Required only for class metrics** with a `score()` method. Function metrics don't need this parameter as they receive the full dataset item.
 - `--list-metrics` - List all available metrics and exit
 - `--model MODEL` - LLM model to use for evaluation (default: gpt-3.5-turbo)
 - `--model-parameters MODEL_PARAMETERS` - JSON string of additional keyword arguments to pass to the LLM model (e.g., '{"temperature": 0.7, "max_tokens": 1000}')
@@ -473,11 +477,12 @@ The `ez-mcp-eval` command now includes automatic validation of input and output 
 - **Error handling**: If the field doesn't exist, the command stops with a clear error message showing available fields
 
 #### Output Field Validation
-- **What it checks**:
+- **What it checks** (only for class metrics with `score()` method):
   - The `--output` VALUE (dataset field) must exist in the dataset items
   - The `--output` KEY (metric parameter) must be a valid parameter for the selected metric(s) score method
 - **When it runs**: Before starting the evaluation
 - **Error handling**: If validation fails, the command stops with clear error messages
+- **Note**: Function metrics skip this validation as they don't require `--output`
 
 #### Example Validation Errors
 
@@ -524,27 +529,103 @@ ez-mcp-eval --list-metrics
 ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination" --debug
 ```
 
-### Custom Metrics
+### Metrics System
 
-You can define custom metrics in a Python file and use them with the `--metrics-file` option. The metric file should contain metric classes that follow the same interface as Opik's built-in metrics.
+The `ez-mcp-eval` command supports two types of metrics that can be loaded from two sources:
 
-#### Example Custom Metric File (`my_metrics.py`)
+#### Metric Types
+
+1. **Class Metrics**: Classes that when instantiated have a `score()` method requiring `--output` mapping
+   - Example: Built-in Opik metrics like `Hallucination`, `LevenshteinRatio`
+   - These use Opik's scoring framework with field mappings
+   - **Require `--output` parameter** to map metric parameters to dataset fields
+
+2. **Function Metrics**: Functions that take `(dataset_item, output)` as parameters
+   - Simple Python functions that receive the full dataset item and LLM output
+   - Must use `output` as the parameter name for the LLM output
+   - Access fields like `reference` from `dataset_item` (e.g., `dataset_item.get("reference")`)
+   - **Do NOT require `--output` parameter**
+
+#### Metric Sources
+
+Metrics can be loaded from:
+- `opik.evaluation.metrics` (built-in Opik metrics) - used when `--metrics-file` is not provided
+- `--metrics-file` (custom Python file) - if provided, metrics from this file take precedence over built-in metrics with the same name
+
+#### Example Class Metric (Built-in)
+
+```bash
+# Use built-in Opik metric (class with score() method)
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination" --output "reference=answer"
+```
+
+#### Example Function Metric (Custom)
+
+Create a custom metric file `my_metrics.py`:
 
 ```python
-class CustomMetric:
-    def __init__(self):
-        self.name = "CustomMetric"
+# my_metrics.py
+def custom_similarity(dataset_item, output):
+    """
+    Custom metric function that takes dataset_item and output.
+    
+    The function should use 'output' as the parameter name for the LLM output,
+    and access fields like 'reference' from dataset_item.
+    
+    Args:
+        dataset_item: Full dictionary of the dataset item (e.g., {"input": "...", "answer": "...", "reference": "..."})
+        output: The LLM's output string
+        
+    Returns:
+        Score (float) or ScoreResult object
+    """
+    # Access fields from dataset_item - commonly 'reference', 'answer', etc.
+    reference = dataset_item.get("reference") or dataset_item.get("answer", "")
+    
+    # Your custom evaluation logic here
+    # Calculate similarity, score, etc. using 'output' and 'reference'
+    similarity = len(set(output.split()) & set(reference.split())) / len(set(reference.split()))
+    
+    return similarity
+```
 
-    def __call__(self, output, reference):
+Then use it:
+```bash
+# Function metric - no --output needed!
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "custom_similarity" --metrics-file "my_metrics.py"
+```
+
+#### Example Class Metric (Custom)
+
+You can also define custom class metrics:
+
+```python
+# my_metrics.py
+from opik.evaluation.metrics import BaseMetric
+
+class CustomMetric(BaseMetric):
+    def score(self, output, reference):
         # Your custom evaluation logic here
-        # Return a score between 0 and 1
+        # Return a score
         return 0.8  # Example score
 ```
 
-Then use it with:
+Then use it with `--output`:
 ```bash
-ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metrics-file "my_metrics.py"
+ez-mcp-eval --prompt "Answer the question" --dataset "qa-dataset" --metric "CustomMetric" --metrics-file "my_metrics.py" --output "reference=answer"
 ```
+
+#### When to Use Each Type
+
+- **Use Class Metrics** when:
+  - You want to use Opik's built-in metrics
+  - You need the full Opik scoring framework integration
+  - You're familiar with Opik's metric interface
+  
+- **Use Function Metrics** when:
+  - You want simpler, more direct metric implementation
+  - You need direct access to the full dataset item
+  - You don't need field mapping configuration
 
 ### Opik Integration
 
@@ -602,7 +683,11 @@ A command-line utility for optimizing LLM applications using Opik's optimization
 ### Basic Usage
 
 ```bash
-ez-mcp-optimize --prompt "Answer the question" --dataset "my-dataset" --metric "hallucination_function" --metrics-file "my_metrics.py"
+# Using built-in Opik metric (class metric - requires --output)
+ez-mcp-optimize --prompt "Answer the question" --dataset "my-dataset" --metric "Hallucination" --output "reference=answer"
+
+# Using function metric from file (no --output needed)
+ez-mcp-optimize --prompt "Answer the question" --dataset "my-dataset" --metric "my_metric" --metrics-file "my_metrics.py"
 ```
 
 ### Command-line Options
@@ -622,14 +707,15 @@ ez-mcp-optimize [-h] [--prompt PROMPT] [--dataset DATASET] [--metric METRIC]
 - `--prompt PROMPT` - The prompt to use for optimization
 - `--dataset DATASET` - Name of the dataset to optimize on
 - `--metric METRIC` - Name of the metric(s) to use for optimization (comma-separated for multiple)
-- `--metrics-file METRICS_FILE` - Path to a Python file containing metric function definitions. The metric must be a Python function that takes (dataset_item, llm_output) as parameters. Required for optimizer.
 
 #### Optional Arguments
+
+- `--metrics-file METRICS_FILE` - Path to a Python file containing metric definitions. If not provided, metrics will be loaded from `opik.evaluation.metrics`. If a metric name exists in both, the metrics file takes precedence. Metrics can be either class metrics (with `score()` method) or function metrics (taking `dataset_item, output` where `output` is the LLM output and `reference` can be accessed from `dataset_item`).
 - `--experiment-name EXPERIMENT_NAME` - Name for the optimization experiment (default: ez-mcp-optimization)
 - `--opik {local,hosted,disabled}` - Opik tracing mode (default: hosted)
 - `--debug` - Enable debug output
 - `--input INPUT` - Input field name in the dataset (default: input)
-- `--output OUTPUT` - Output field mapping. Accepts 'REFERENCE=FIELD', 'REFERENCE:FIELD', or just 'FIELD'. If only FIELD is provided, it will be used as the ChatPrompt user field. (default: reference=answer)
+- `--output OUTPUT` - Output field mapping. Accepts 'REFERENCE=FIELD', 'REFERENCE:FIELD', or just 'FIELD'. If only FIELD is provided, it will be used as the ChatPrompt user field. (default: reference=answer). **Required only for class metrics** with a `score()` method. Function metrics don't need this parameter as they receive the full dataset item.
 - `--list-metrics` - List all available metrics and exit
 - `--model MODEL` - LLM model to use for optimization (default: gpt-3.5-turbo)
 - `--model-parameters MODEL_PARAMETERS` - JSON string of additional keyword arguments to pass to the LLM model (e.g., '{"temperature": 0.7, "max_tokens": 1000}')
@@ -654,38 +740,116 @@ The tool supports various optimization algorithms:
 
 #### Basic Optimization
 ```bash
-# Simple optimization with Hallucination metric
+# Simple optimization with built-in Opik metric (class metric)
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination" --output "reference=answer"
+
+# Or with custom function metric from file
 ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "hallucination_function" --metrics-file "my_metrics.py"
 ```
 
 #### Multiple Metrics
 ```bash
-# Optimize with multiple metrics
+# Optimize with multiple built-in metrics
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination,LevenshteinRatio" --output "reference=answer"
+
+# Or with custom metrics from file
 ez-mcp-optimize --prompt "Summarize this text" --dataset "summarization-dataset" --metric "hallucination_function,levenshtein_ratio_function" --metrics-file "my_metrics.py"
 ```
 
 #### Custom Optimizer
 ```bash
-# Use a different optimizer
+# Use a different optimizer with built-in metric
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --output "reference=answer" --optimizer "FewShotBayesianOptimizer"
+
+# Or with custom metric
 ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "levenshtein_ratio_function" --metrics-file "my_metrics.py" --optimizer "FewShotBayesianOptimizer"
 ```
 
 #### Custom Model and Parameters
 ```bash
-# Use a different model with custom parameters
+# Use a different model with built-in metric
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --output "reference=answer" --model "gpt-4" --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'
+
+# Or with custom metric
 ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "levenshtein_ratio_function" --metrics-file "my_metrics.py" --model "gpt-4" --model-parameters '{"temperature": 0.7, "max_tokens": 1000}'
 ```
 
 #### Custom Optimizer Parameters
 ```bash
 # Use custom optimizer parameters
-ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "levenshtein_ratio_function" --metrics-file "my_metrics.py" --class-kwargs '{"population_size": 50, "mutation_rate": 0.1}'
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --output "reference=answer" --class-kwargs '{"population_size": 50, "mutation_rate": 0.1}'
 ```
 
 #### Custom Optimization Parameters
 ```bash
 # Use custom optimization parameters
-ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "levenshtein_ratio_function" --metrics-file "my_metrics.py" --optimize-kwargs '{"auto_continue": true, "n_samples": 100}'
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "LevenshteinRatio" --output "reference=answer" --optimize-kwargs '{"auto_continue": true, "n_samples": 100}'
+```
+
+### Metrics System
+
+The `ez-mcp-optimize` command supports the same metrics system as `ez-mcp-eval`. Metrics can be loaded from `opik.evaluation.metrics` or from a custom `--metrics-file`, and can be either class metrics or function metrics.
+
+#### Quick Reference
+
+- **Class Metrics**: Require `--output` parameter (e.g., `--output "reference=answer"`)
+- **Function Metrics**: Do NOT require `--output` parameter
+- **Metric Sources**: `opik.evaluation.metrics` (default) or `--metrics-file` (overrides built-in with same name)
+- **`--metrics-file`**: Optional - use built-in metrics if not provided
+
+#### Example: Using Built-in Class Metrics
+
+```bash
+# No --metrics-file needed! Uses opik.evaluation.metrics
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "Hallucination" --output "reference=answer"
+```
+
+#### Example: Using Custom Function Metrics
+
+Create `my_metrics.py`:
+
+```python
+# my_metrics.py
+def my_optimization_metric(dataset_item, output):
+    """
+    Custom metric for optimization.
+    
+    The function should use 'output' as the parameter name for the LLM output,
+    and access fields like 'reference' from dataset_item.
+    
+    Args:
+        dataset_item: Full dictionary of the dataset item (e.g., {"input": "...", "reference": "..."})
+        output: The LLM's output string
+        
+    Returns:
+        Score (float) - higher is better for optimization
+    """
+    # Access 'reference' (or other fields) from dataset_item
+    reference = dataset_item.get("reference") or dataset_item.get("answer", "")
+    # Your optimization logic here using 'output' and 'reference'
+    return calculate_score(output, reference)
+```
+
+Use it without `--output`:
+```bash
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "my_optimization_metric" --metrics-file "my_metrics.py"
+```
+
+#### Example: Using Custom Class Metrics
+
+```python
+# my_metrics.py
+from opik.evaluation.metrics import BaseMetric
+
+class MyClassMetric(BaseMetric):
+    def score(self, output, reference):
+        # Your scoring logic
+        return calculate_score(output, reference)
+```
+
+Use with `--output`:
+```bash
+ez-mcp-optimize --prompt "Answer the question" --dataset "qa-dataset" --metric "MyClassMetric" --metrics-file "my_metrics.py" --output "reference=answer"
 ```
 
 ### Opik Integration

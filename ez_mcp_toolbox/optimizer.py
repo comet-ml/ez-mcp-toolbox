@@ -205,27 +205,30 @@ class MCPOptimizer(MCPChatbot):
 
         This allows for early exit with clean error messages before any async tasks are created.
         """
-        if self.config.metrics_file is None:
-            raise ValueError(
-                "Optimizer requires a metrics file. Use --metrics-file parameter."
-            )
         # Just validate - don't return the metrics yet
         # This will raise ValueError if metric doesn't exist
         load_metrics_by_names_for_optimizer(
-            self.config.metric, self.config.metrics_file, self.console
+            self.config.metric,
+            self.config.metrics_file,
+            self.console,
+            output_ref=self.config.output_ref,
+            reference_field=self.config.reference_field,
         )
 
     def get_metrics(self) -> List[Any]:
         """Get the metrics to use for optimization.
 
-        Metrics must be Python functions from --metrics-file that take (dataset_item, llm_output) as parameters.
+        Metrics can be loaded from either opik.evaluation.metrics OR --metrics-file.
+        Metrics can be either:
+        1. A class that when instantiated has a score() method requiring --output mapping
+        2. A function that takes (dataset_item, llm_output) as parameters
         """
-        if self.config.metrics_file is None:
-            raise ValueError(
-                "Optimizer requires a metrics file. Use --metrics-file parameter."
-            )
         return load_metrics_by_names_for_optimizer(
-            self.config.metric, self.config.metrics_file, self.console
+            self.config.metric,
+            self.config.metrics_file,
+            self.console,
+            output_ref=self.config.output_ref,
+            reference_field=self.config.reference_field,
         )
 
     # _load_metrics_from_file removed
@@ -860,8 +863,8 @@ Examples:
     parser.add_argument(
         "--metrics-file",
         type=str,
-        required=True,
-        help="Path to a Python file containing metric function definitions. The metric must be a Python function that takes (dataset_item, llm_output) as parameters. Required for optimizer.",
+        required=False,
+        help="Path to a Python file containing metric definitions. If not provided, metrics will be loaded from opik.evaluation.metrics. Metrics can be either a class with a score() method or a function taking (dataset_item, llm_output).",
     )
 
     parser.add_argument(

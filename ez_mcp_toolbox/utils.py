@@ -1270,7 +1270,14 @@ def _load_metrics_from_file(file_path: str, console: Optional[Console] = None) -
 def load_metrics_by_names(
     metric_names_csv: str, metrics_file: Optional[str], console: Console
 ) -> List[Any]:
-    """Instantiate metrics by name from an optional custom file or opik.evaluation.metrics."""
+    """Load metrics by name from either opik.evaluation.metrics OR --metrics-file.
+
+    Metrics can be either:
+    1. A class that when instantiated has a score() method requiring --output mapping
+    2. A function that takes (dataset_item, llm_output) as parameters
+
+    Returns a list of metric instances (class instances or function adapters).
+    """
     names = [name.strip() for name in metric_names_csv.split(",")]
     metric_instances: List[Any] = []
     custom_module = (
@@ -1278,17 +1285,20 @@ def load_metrics_by_names(
     )
 
     for metric_name in names:
-        metric_class = None
+        metric_obj = None
         source_module = None
+
+        # Try custom module first if provided
         if custom_module and hasattr(custom_module, metric_name):
-            metric_class = getattr(custom_module, metric_name)
+            metric_obj = getattr(custom_module, metric_name)
             source_module = "custom metrics file"
         else:
+            # Try opik.evaluation.metrics
             if hasattr(opik_metrics, metric_name):
-                metric_class = getattr(opik_metrics, metric_name)
+                metric_obj = getattr(opik_metrics, metric_name)
                 source_module = "opik.evaluation.metrics"
 
-        if metric_class is None:
+        if metric_obj is None:
             console.print(f"❌ Unknown metric '{metric_name}'. Available metrics:")
             if custom_module:
                 console.print("   From custom metrics file:")
@@ -1301,81 +1311,215 @@ def load_metrics_by_names(
                 console.print(f"     - {available_metric}")
             raise ValueError(f"Unknown metric: {metric_name}")
 
-        metric_instance = metric_class()
+        # Check if it's a class or a function
+        if isinstance(metric_obj, type):
+            # It's a class - instantiate it
+            metric_instance = metric_obj()
 
-        # Ensure OPIK integration for ALL metrics (both custom and built-in)
-        from opik.evaluation.metrics import BaseMetric
+            # Ensure OPIK integration for ALL metrics (both custom and built-in)
+            from opik.evaluation.metrics import BaseMetric
 
-        if isinstance(metric_instance, BaseMetric):
-            # Enable OPIK tracking for all metrics
-            if hasattr(metric_instance, "track"):
-                metric_instance.track = True
-                if source_module == "custom metrics file":
-                    console.print(
-                        f"✅ Enabled OPIK tracking for custom metric: {metric_name}"
-                    )
-                else:
-                    console.print(
-                        f"✅ Enabled OPIK tracking for built-in metric: {metric_name}"
-                    )
-        else:
+            if isinstance(metric_instance, BaseMetric):
+                # Enable OPIK tracking for all metrics
+                if hasattr(metric_instance, "track"):
+                    metric_instance.track = True
+                    if source_module == "custom metrics file":
+                        console.print(
+                            f"✅ Enabled OPIK tracking for custom metric: {metric_name}"
+                        )
+                    else:
+                        console.print(
+                            f"✅ Enabled OPIK tracking for built-in metric: {metric_name}"
+                        )
+            else:
+                console.print(
+                    f"⚠️  Warning: Metric '{metric_name}' should inherit from BaseMetric for proper OPIK integration"
+                )
+
+            metric_instances.append(metric_instance)
             console.print(
-                f"⚠️  Warning: Metric '{metric_name}' should inherit from BaseMetric for proper OPIK integration"
+                f"✅ Loaded metric class: {metric_name} (from {source_module})"
             )
 
-        metric_instances.append(metric_instance)
-        console.print(f"✅ Loaded metric: {metric_name} (from {source_module})")
+        elif callable(metric_obj):
+            # It's a function - create an adapter class
+            from opik.evaluation.metrics import BaseMetric
+
+            class FunctionMetricAdapter(BaseMetric):
+                """Adapter class to wrap a function metric for use with Opik evaluate()."""
+
+                def __init__(self, metric_fn: Callable, metric_name: str):
+                    super().__init__()
+                    self.metric_fn = metric_fn
+                    self.metric_name_str = metric_name
+
+                def score(self, **kwargs) -> Any:
+                    """Score method that adapts function signature to Opik's expected format.
+
+                    Expects kwargs like 'output' (llm_output) and other fields.
+                    Constructs dataset_item from kwargs (excluding 'output') and calls the function.
+                    """
+                    # Extract llm_output from 'output' parameter (standard Opik convention)
+                    llm_output = kwargs.pop("output", None)
+                    if llm_output is None:
+                        raise ValueError(
+                            f"Function metric '{self.metric_name_str}' requires 'output' parameter "
+                            f"(which should be mapped from task output via scoring_key_mapping)"
+                        )
+
+                    # Everything else goes into dataset_item
+                    dataset_item = kwargs
+
+                    # Call the original function
+                    return self.metric_fn(dataset_item, llm_output)
+
+            metric_instance = FunctionMetricAdapter(metric_obj, metric_name)
+            if hasattr(metric_instance, "track"):
+                metric_instance.track = True
+
+            metric_instances.append(metric_instance)
+            console.print(
+                f"✅ Loaded metric function (adapted): {metric_name} (from {source_module})"
+            )
+        else:
+            raise ValueError(
+                f"Metric '{metric_name}' must be either a class or a callable function"
+            )
 
     return metric_instances
 
 
 def load_metrics_by_names_for_optimizer(
-    metric_names_csv: str, metrics_file: str, console: Console
+    metric_names_csv: str,
+    metrics_file: Optional[str],
+    console: Console,
+    output_ref: str = "reference",
+    reference_field: str = "answer",
 ) -> List[Any]:
-    """Load metric functions by name from a custom file ONLY (for optimizer use).
+    """Load metrics by name from either opik.evaluation.metrics OR --metrics-file (for optimizer use).
 
-    The metric must be a Python function that takes (dataset_item, llm_output) as parameters.
+    Metrics can be either:
+    1. A class that when instantiated has a score() method requiring --output mapping
+    2. A function that takes (dataset_item, llm_output) as parameters
+
+    For class metrics, creates a wrapper function that adapts to optimizer's expected signature.
+    For function metrics, uses them directly.
+
+    Args:
+        metric_names_csv: Comma-separated list of metric names
+        metrics_file: Optional path to Python file containing metrics
+        console: Console for output
+        output_ref: The parameter name expected by the metric's score() method (default: "reference")
+        reference_field: The dataset field name to use as reference (default: "answer")
+
+    Returns:
+        List of callable functions that take (dataset_item, llm_output) as parameters
     """
     names = [name.strip() for name in metric_names_csv.split(",")]
     metric_functions: List[Any] = []
 
-    if not metrics_file:
-        raise ValueError(
-            "Optimizer requires a metrics file. Use --metrics-file parameter."
-        )
-
-    custom_module = _load_metrics_from_file(metrics_file, console)
+    custom_module = (
+        _load_metrics_from_file(metrics_file, console) if metrics_file else None
+    )
 
     for metric_name in names:
-        if not hasattr(custom_module, metric_name):
-            console.print(
-                f"❌ Unknown metric '{metric_name}' in metrics file. Available metrics:"
-            )
-            console.print("   From custom metrics file:")
-            for available_metric in _list_available_metrics_from_module(custom_module):
+        metric_obj = None
+        source_module = None
+
+        # Try custom module first if provided
+        if custom_module and hasattr(custom_module, metric_name):
+            metric_obj = getattr(custom_module, metric_name)
+            source_module = "custom metrics file"
+        else:
+            # Try opik.evaluation.metrics
+            if hasattr(opik_metrics, metric_name):
+                metric_obj = getattr(opik_metrics, metric_name)
+                source_module = "opik.evaluation.metrics"
+
+        if metric_obj is None:
+            console.print(f"❌ Unknown metric '{metric_name}'. Available metrics:")
+            if custom_module:
+                console.print("   From custom metrics file:")
+                for available_metric in _list_available_metrics_from_module(
+                    custom_module
+                ):
+                    console.print(f"     - {available_metric}")
+            console.print("   From opik.evaluation.metrics:")
+            for available_metric in _list_available_metrics_from_module(opik_metrics):
                 console.print(f"     - {available_metric}")
             raise ValueError(f"Unknown metric: {metric_name}")
 
-        metric_fn = getattr(custom_module, metric_name)
+        # Check if it's a class or a function
+        if isinstance(metric_obj, type):
+            # It's a class - create a wrapper function
+            metric_instance = metric_obj()
 
-        # Check if it's a class (which we don't want for optimizer)
-        # Classes are callable but also instances of type, so check this first
-        if isinstance(metric_fn, type):
-            raise ValueError(
-                f"Metric '{metric_name}' is a class, but optimizer requires a function. "
-                f"The function should take (dataset_item, llm_output) as parameters."
+            # Create a wrapper function that adapts the class's score() method
+            # to the optimizer's expected signature (dataset_item, llm_output)
+            def make_class_metric_wrapper(metric_inst, metric_nm, ref_param, ref_field):
+                def class_metric_wrapper(dataset_item, llm_output):
+                    """Wrapper function that calls class metric's score() method."""
+                    # Extract the reference value from dataset_item
+                    reference_value = dataset_item.get(ref_field)
+
+                    # Call the metric's score() method with the expected parameters
+                    # The score() method typically expects 'output' (llm_output) and 'reference' (or other name)
+                    try:
+                        # Try calling with output and the reference parameter name
+                        result = metric_inst.score(
+                            output=llm_output, **{ref_param: reference_value}
+                        )
+                        return result
+                    except Exception:
+                        # If that fails, try with just output and reference (common case)
+                        try:
+                            result = metric_inst.score(
+                                output=llm_output, reference=reference_value
+                            )
+                            return result
+                        except Exception:
+                            # If that also fails, try inspecting the signature
+                            import inspect
+
+                            sig = inspect.signature(metric_inst.score)
+                            param_names = list(sig.parameters.keys())
+                            param_names.remove("self")
+
+                            # Build kwargs based on available parameters
+                            kwargs = {"output": llm_output}
+                            if ref_param in param_names:
+                                kwargs[ref_param] = reference_value
+                            elif "reference" in param_names:
+                                kwargs["reference"] = reference_value
+                            elif len(param_names) > 0:
+                                # Use first parameter after output for reference
+                                other_params = [p for p in param_names if p != "output"]
+                                if other_params:
+                                    kwargs[other_params[0]] = reference_value
+
+                            result = metric_inst.score(**kwargs)
+                            return result
+
+                return class_metric_wrapper
+
+            metric_fn = make_class_metric_wrapper(
+                metric_instance, metric_name, output_ref, reference_field
+            )
+            metric_functions.append(metric_fn)
+            console.print(
+                f"✅ Loaded metric class (adapted): {metric_name} (from {source_module})"
             )
 
-        # Verify it's callable (should be a function)
-        if not callable(metric_fn):
-            raise ValueError(
-                f"Metric '{metric_name}' must be a callable function that takes (dataset_item, llm_output) as parameters"
+        elif callable(metric_obj):
+            # It's a function - use it directly
+            metric_functions.append(metric_obj)
+            console.print(
+                f"✅ Loaded metric function: {metric_name} (from {source_module})"
             )
-
-        metric_functions.append(metric_fn)
-        console.print(
-            f"✅ Loaded metric function: {metric_name} (from custom metrics file)"
-        )
+        else:
+            raise ValueError(
+                f"Metric '{metric_name}' must be either a class or a callable function"
+            )
 
     return metric_functions
 
