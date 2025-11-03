@@ -17,7 +17,6 @@ from dataclasses import dataclass
 
 from opik.evaluation import evaluate
 from opik.exceptions import ScoreMethodMissingArguments
-from opik import track
 from rich.console import Console
 from dotenv import load_dotenv
 
@@ -26,7 +25,6 @@ from .utils import (
     init_opik_and_load_dataset,
     resolve_prompt_with_opik,
     load_metrics_by_names,
-    generate_mcp_mermaid_diagram,
 )
 from .mcp_utils import ServerConfig
 from .chatbot import MCPChatbot
@@ -164,10 +162,11 @@ class MCPEvaluator(MCPChatbot):
                     self.console = None  # Disable console output
                     self.mcp_manager.debug = False  # Disable MCP debug output
 
-                    # Run the async chat method in a sync context
-                    import asyncio
+                    # Run the async chat method in a sync context using nest_asyncio
+                    # to preserve Opik trace context for proper cost logging
+                    from .utils import run_async_in_sync_context
 
-                    response = asyncio.run(self.chat(str(input_value)))
+                    response = run_async_in_sync_context(self.chat, str(input_value))
 
                     # Restore original settings
                     self.debug = original_debug
@@ -209,43 +208,9 @@ class MCPEvaluator(MCPChatbot):
 
         return _list(metrics_module)
 
-    @track(name="evaluation_run", type="general")
     async def run_evaluation(self) -> Any:
         """Run the evaluation using Opik."""
         try:
-            # Generate and attach mermaid diagram to trace metadata
-            mermaid_diagram = await generate_mcp_mermaid_diagram(self.mcp_manager)
-            if mermaid_diagram:
-                try:
-                    from opik import opik_context
-
-                    # Get existing metadata and merge, preserving what's already there
-                    existing_metadata = {}
-                    try:
-                        current_trace = opik_context.get_current_trace()
-                        if (
-                            current_trace
-                            and hasattr(current_trace, "metadata")
-                            and current_trace.metadata
-                        ):
-                            existing_metadata = (
-                                current_trace.metadata.copy()
-                                if isinstance(current_trace.metadata, dict)
-                                else {}
-                            )
-                    except Exception:
-                        pass
-
-                    # Set _opik_graph_definition within metadata
-                    existing_metadata["_opik_graph_definition"] = {
-                        "format": "mermaid",
-                        "data": mermaid_diagram,
-                    }
-                    opik_context.update_current_trace(metadata=existing_metadata)
-                except Exception:
-                    # Opik not available, continue without tracing
-                    pass
-
             self.console.print("🚀 Starting evaluation...")
             self.console.print(f"   - Experiment: {self.config.experiment_name}")
             self.console.print(f"   - Project: {self.config.project_name}")
