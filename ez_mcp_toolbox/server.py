@@ -26,6 +26,9 @@ server = Server("ez-mcp-server")
 # Global variable to track server state for clean shutdown
 _server_task: Optional[asyncio.Task[None]] = None
 
+# Global variable to track quiet mode for SSE endpoints
+_quiet_mode: bool = False
+
 
 def load_default_tools() -> None:
     """Load the default example tools from the README."""
@@ -97,6 +100,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         help="Python regex pattern to exclude matching tool names",
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress all output messages",
+    )
     return parser.parse_args()
 
 
@@ -135,7 +143,8 @@ async def sse_endpoint() -> StreamingResponse:
         # Add client to the set
         client_id = id(asyncio.current_task())
         _sse_clients.add(client_id)
-        print(f"🔌 SSE client connected: {client_id}", file=sys.stderr)
+        if not _quiet_mode:
+            print(f"🔌 SSE client connected: {client_id}", file=sys.stderr)
 
         try:
             while True:
@@ -147,7 +156,8 @@ async def sse_endpoint() -> StreamingResponse:
                     # Send keepalive
                     yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
         except asyncio.CancelledError:
-            print(f"🔌 SSE client disconnected: {client_id}", file=sys.stderr)
+            if not _quiet_mode:
+                print(f"🔌 SSE client disconnected: {client_id}", file=sys.stderr)
         finally:
             _sse_clients.discard(client_id)
 
@@ -168,7 +178,8 @@ async def message_endpoint(request: Request) -> Dict[str, Any]:
     """HTTP POST endpoint for client-to-server communication."""
     try:
         data = await request.json()
-        print(f"📨 Received message: {data}", file=sys.stderr)
+        if not _quiet_mode:
+            print(f"📨 Received message: {data}", file=sys.stderr)
 
         # Process the message through the MCP server
         # This is a simplified implementation - in a real scenario,
@@ -180,7 +191,8 @@ async def message_endpoint(request: Request) -> Dict[str, Any]:
 
         return {"status": "success", "message": "Message processed"}
     except Exception as e:
-        print(f"❌ Error processing message: {e}")
+        if not _quiet_mode:
+            print(f"❌ Error processing message: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -190,21 +202,25 @@ async def health_check() -> Dict[str, str]:
     return {"status": "healthy", "transport": "sse"}
 
 
-async def start_sse_server(host: str, port: int) -> None:
+async def start_sse_server(host: str, port: int, quiet_mode: bool = False) -> None:
     """Start the SSE server."""
-    print(f"🚀 Starting SSE server on {host}:{port}", file=sys.stderr)
-    print(f"📡 SSE endpoint: http://{host}:{port}/sse", file=sys.stderr)
-    print(f"📨 Messages endpoint: http://{host}:{port}/messages", file=sys.stderr)
-    print(f"🏥 Health check: http://{host}:{port}/health", file=sys.stderr)
+    if not quiet_mode:
+        print(f"🚀 Starting SSE server on {host}:{port}", file=sys.stderr)
+        print(f"📡 SSE endpoint: http://{host}:{port}/sse", file=sys.stderr)
+        print(f"📨 Messages endpoint: http://{host}:{port}/messages", file=sys.stderr)
+        print(f"🏥 Health check: http://{host}:{port}/health", file=sys.stderr)
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    log_level = "error" if quiet_mode else "info"
+    config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
     server_instance = uvicorn.Server(config)
     await server_instance.serve()
 
 
 def signal_handler(signum: int, frame: Any) -> None:
     """Handle shutdown signals gracefully."""
-    print("\n🛑 Received shutdown signal, cleaning up...", file=sys.stderr)
+    # Check for quiet mode before printing
+    if not _quiet_mode:
+        print("\n🛑 Received shutdown signal, cleaning up...", file=sys.stderr)
     if _server_task and not _server_task.done():
         _server_task.cancel()
     # Force immediate exit to avoid waiting for stdin
@@ -213,13 +229,18 @@ def signal_handler(signum: int, frame: Any) -> None:
 
 async def main() -> None:
     """Run the server."""
-    global _server_task
+    global _server_task, _quiet_mode
 
     # Parse command line arguments
     args = parse_args()
 
-    # Check for quiet mode (used by isolated tool calls)
-    quiet_mode = os.getenv("EZ_MCP_QUIET") == "1"
+    # Determine quiet mode (from command line flag or environment variable)
+    quiet_mode = bool(args.quiet) or os.getenv("EZ_MCP_QUIET") == "1"
+    _quiet_mode = quiet_mode
+
+    # Set environment variable immediately so utility functions can check it
+    if quiet_mode:
+        os.environ["EZ_MCP_QUIET"] = "1"
 
     if not quiet_mode:
         print("🚀 Ez MCP Server Starting...", file=sys.stderr)
@@ -268,7 +289,10 @@ async def main() -> None:
                         f"✓ Loaded tools from module {args.tools_file}", file=sys.stderr
                     )
     except Exception as e:
-        print(f"❌ Failed to load tools from {args.tools_file}: {e}", file=sys.stderr)
+        if not quiet_mode:
+            print(
+                f"❌ Failed to load tools from {args.tools_file}: {e}", file=sys.stderr
+            )
         sys.exit(1)
 
     # Apply tool filtering if specified
@@ -281,7 +305,8 @@ async def main() -> None:
                     file=sys.stderr,
                 )
         except re.error as e:
-            print(f"❌ Invalid regex pattern: {e}", file=sys.stderr)
+            if not quiet_mode:
+                print(f"❌ Invalid regex pattern: {e}", file=sys.stderr)
             sys.exit(1)
 
     # Initialize session context
@@ -313,20 +338,24 @@ async def main() -> None:
                 await _server_task
         elif args.transport == "sse":
             # Use SSE transport
-            await start_sse_server(args.host, args.port)
+            await start_sse_server(args.host, args.port, quiet_mode)
         else:
-            print(f"❌ Unknown transport: {args.transport}")
+            if not quiet_mode:
+                print(f"❌ Unknown transport: {args.transport}")
             sys.exit(1)
     except asyncio.CancelledError:
-        print("🛑 Server shutdown completed", file=sys.stderr)
+        if not quiet_mode:
+            print("🛑 Server shutdown completed", file=sys.stderr)
         # Force immediate exit to avoid waiting for stdin
         os._exit(0)
     except KeyboardInterrupt:
-        print("\n🛑 Received keyboard interrupt, shutting down...", file=sys.stderr)
+        if not quiet_mode:
+            print("\n🛑 Received keyboard interrupt, shutting down...", file=sys.stderr)
         # Force immediate exit to avoid waiting for stdin
         os._exit(0)
     except Exception as e:
-        print(f"❌ Server error: {e}", file=sys.stderr)
+        if not quiet_mode:
+            print(f"❌ Server error: {e}", file=sys.stderr)
         raise
 
 

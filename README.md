@@ -133,7 +133,7 @@ to run from inside a system that will dynamically start the server (see below).
 ### Command-line Options
 
 ```
-ez-mcp-server [-h] [--transport {stdio,sse}] [--host HOST] [--port PORT] [--include INCLUDE] [--exclude EXCLUDE] [tools_file]
+ez-mcp-server [-h] [--transport {stdio,sse}] [--host HOST] [--port PORT] [--include INCLUDE] [--exclude EXCLUDE] [--quiet] [tools_file]
 ```
 
 Positional arguments:
@@ -146,6 +146,7 @@ Options:
   * `--port PORT` - Port for SSE transport (default: `8000`)
   * `--include INCLUDE` - Python regex pattern to include only matching tool names
   * `--exclude EXCLUDE` - Python regex pattern to exclude matching tool names
+  * `--quiet` - Suppress all output messages
 
 ### Tool Filtering
 

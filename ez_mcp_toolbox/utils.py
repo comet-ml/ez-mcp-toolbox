@@ -478,12 +478,16 @@ def load_tools_from_file(file_path: str) -> None:
     sys.modules["tools_module"] = module
     spec.loader.exec_module(module)
 
+    # Check for quiet mode (from environment variable)
+    quiet_mode = os.getenv("EZ_MCP_QUIET") == "1"
+
     # Check for and call _initialize function if it exists
     if hasattr(module, "_initialize") and callable(module._initialize):
         try:
             module._initialize()
         except Exception as e:
-            print(f"Warning: Error calling _initialize function: {e}")
+            if not quiet_mode:
+                print(f"Warning: Error calling _initialize function: {e}")
 
     # Skip utility functions and classes
     skip_functions = {"TypedDict"}
@@ -539,10 +543,12 @@ def load_tools_from_file(file_path: str) -> None:
                         registry.tool(wrapper_func)
 
             except Exception as e:
-                print(f"Warning: Could not instantiate class {name}: {e}")
+                if not quiet_mode:
+                    print(f"Warning: Could not instantiate class {name}: {e}")
                 continue
 
-    print(f"Loaded {len(registry._tools)} tools from {file_path}")
+    if not quiet_mode:
+        print(f"Loaded {len(registry._tools)} tools from {file_path}")
 
 
 def load_tools_from_module(module_name: str) -> None:
@@ -562,12 +568,16 @@ def load_tools_from_module(module_name: str) -> None:
     except ImportError as e:
         raise ImportError(f"Could not import module '{module_name}': {e}")
 
+    # Check for quiet mode (from environment variable)
+    quiet_mode = os.getenv("EZ_MCP_QUIET") == "1"
+
     # Check for and call _initialize function if it exists
     if hasattr(module, "_initialize") and callable(module._initialize):
         try:
             module._initialize()
         except Exception as e:
-            print(f"Warning: Error calling _initialize function: {e}")
+            if not quiet_mode:
+                print(f"Warning: Error calling _initialize function: {e}")
 
     # Skip utility functions and classes
     skip_functions = {"TypedDict"}
@@ -623,10 +633,12 @@ def load_tools_from_module(module_name: str) -> None:
                         registry.tool(wrapper_func)
 
             except Exception as e:
-                print(f"Warning: Could not instantiate class {name}: {e}")
+                if not quiet_mode:
+                    print(f"Warning: Could not instantiate class {name}: {e}")
                 continue
 
-    print(f"Loaded {len(registry._tools)} tools from module {module_name}")
+    if not quiet_mode:
+        print(f"Loaded {len(registry._tools)} tools from module {module_name}")
 
 
 # =============================================================================
