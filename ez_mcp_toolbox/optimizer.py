@@ -43,6 +43,17 @@ warnings.filterwarnings(
 warnings.filterwarnings(
     "ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*"
 )
+# Suppress pydantic serialization warnings
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*Pydantic.*serializer.*",
+)
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*PydanticSerialization.*",
+)
 
 load_dotenv()
 

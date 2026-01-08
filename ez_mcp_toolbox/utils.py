@@ -32,6 +32,17 @@ warnings.filterwarnings(
 warnings.filterwarnings(
     "ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*"
 )
+# Suppress pydantic serialization warnings
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*Pydantic.*serializer.*",
+)
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*PydanticSerialization.*",
+)
 
 # Configure litellm to drop params
 litellm.drop_params = True
