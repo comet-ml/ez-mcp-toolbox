@@ -8,16 +8,15 @@ import io
 import traceback
 import warnings
 import ast
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 from opik import track
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+
+# Don't import prompt_toolkit here - we'll import it lazily only when needed (not in Jupyter)
+# This prevents the "Input is not a terminal" warning in Jupyter environments
 
 from .utils import (
     configure_opik as configure_opik_util,
@@ -56,12 +55,15 @@ def configure_opik(opik_mode: str = "hosted") -> None:
     configure_opik_util(opik_mode, "ez-mcp-chatbot")
 
 
-class ChatbotCompleter(Completer):
-    """Custom completer for the chatbot with command and Python code completion."""
+class ChatbotCompleter:
+    """Custom completer for the chatbot with command and Python code completion.
+
+    This class implements the prompt_toolkit Completer interface.
+    """
 
     def __init__(self) -> None:
         # Basic commands
-        self.commands = ["/clear", "quit", "exit", "help"]
+        self.commands = ["/clear", "quit", "exit", "/help"]
 
         # Python built-ins and common functions for ! commands
         self.python_keywords = [
@@ -209,11 +211,55 @@ class ChatbotCompleter(Completer):
 
     def get_completions(self, document: Any, complete_event: Any) -> Any:
         """Provide completions based on the current input."""
+        # Lazy import Completion only when needed
+        from prompt_toolkit.completion import Completion
+
         text = document.text
         # word = document.get_word_before_cursor()  # Unused variable
 
         # Command completions (for commands starting with / or basic commands)
-        if text.startswith("/") or text in ["quit", "exit", "help"]:
+        if text.startswith("/") or text in ["quit", "exit"]:
+            for cmd in self.commands:
+                if cmd.startswith(text):
+                    yield Completion(cmd, start_position=-len(text))
+
+        # Python code completions (for commands starting with !)
+        elif text.startswith("!"):
+            python_text = text[1:]  # Remove the ! prefix
+            python_word = python_text.split()[-1] if python_text.split() else ""
+
+            # First, try chatbot-specific attributes
+            for attr in self.chatbot_attributes:
+                if attr.startswith(python_word):
+                    # Don't add extra ! prefix since text already starts with !
+                    yield Completion(
+                        f"{python_text.replace(python_word, attr)}",
+                        start_position=-len(python_word),
+                    )
+
+            # Then try Python keywords
+            for keyword in self.python_keywords:
+                if keyword.startswith(python_word):
+                    # Don't add extra ! prefix since text already starts with !
+                    yield Completion(
+                        f"{python_text.replace(python_word, keyword)}",
+                        start_position=-len(python_word),
+                    )
+
+        # General word completions for other cases
+        else:
+            # Could add more sophisticated completion here
+            pass
+
+    async def get_completions_async(self, document: Any, complete_event: Any) -> Any:
+        """Async version of get_completions for prompt_toolkit compatibility."""
+        # Lazy import Completion only when needed
+        from prompt_toolkit.completion import Completion
+
+        text = document.text
+
+        # Command completions (for commands starting with / or basic commands)
+        if text.startswith("/") or text in ["quit", "exit"]:
             for cmd in self.commands:
                 if cmd.startswith(text):
                     yield Completion(cmd, start_position=-len(text))
@@ -250,7 +296,7 @@ class ChatbotCompleter(Completer):
 class MCPChatbot:
     def __init__(
         self,
-        config_path: str,
+        config_path: Union[str, Dict[str, Any]],
         system_prompt: str,
         max_rounds: Optional[int] = 10,
         debug: bool = False,
@@ -260,7 +306,10 @@ class MCPChatbot:
         prompt_id: Optional[str] = None,
     ) -> None:
         self.system_prompt = system_prompt
-        self.config_path = config_path
+        # Store config_path if string, None if dict (for backward compatibility)
+        self.config_path = config_path if isinstance(config_path, str) else None
+        # Store the full config (dict or path) for use in connect_all_servers
+        self._config_source = config_path
         self.tools_file = tools_file
         self.prompt_id = prompt_id
         self.servers, self.model, self.model_parameters = self.load_config(config_path)
@@ -282,19 +331,45 @@ class MCPChatbot:
         # Initialize MCP manager
         self.mcp_manager = MCPManager(console=self.console, debug=debug)
 
-        # Set up prompt_toolkit for enhanced input handling
-        self._setup_prompt_toolkit()
+        # Set up prompt_toolkit for enhanced input handling (only if not in Jupyter)
+        # In Jupyter, we use widgets instead, so we can skip prompt_toolkit setup
+        # Initialize prompt_session as None - will be set up later if needed
+        self.prompt_session: Optional[Any] = None
+        if not self._is_jupyter():
+            self._setup_prompt_toolkit()
 
         # Set up persistent Python evaluation environment
         self._setup_python_environment()
 
     def _setup_prompt_toolkit(self) -> None:
-        """Set up prompt_toolkit for enhanced input handling with history and completion."""
+        """Set up prompt_toolkit for enhanced input handling with history and completion.
+
+        This is only called when NOT in Jupyter environment.
+        All prompt_toolkit imports are lazy to avoid warnings in Jupyter.
+        """
+        # Lazy import - only import prompt_toolkit when we actually need it
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import FileHistory
+        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+        from prompt_toolkit.completion import Completer
+
+        # Make ChatbotCompleter inherit from Completer for proper interface
+        # We do this dynamically to avoid importing prompt_toolkit at module level
+        # Check if it's already a subclass (might have been set up before)
+        try:
+            if not issubclass(ChatbotCompleter, Completer):
+                # Dynamically add Completer as a base class
+                ChatbotCompleter.__bases__ = (Completer,) + ChatbotCompleter.__bases__
+        except TypeError:
+            # If __bases__ manipulation fails, that's okay - the methods should still work
+            pass
+
         # Set up history file
         history_file = os.path.expanduser("~/.opik_mcp_chatbot_history")
 
         # Create prompt session with history and completion
-        self.prompt_session: PromptSession = PromptSession(
+        # Note: self.prompt_session is already declared, just assign to it
+        self.prompt_session = PromptSession(
             history=FileHistory(history_file),
             completer=ChatbotCompleter(),
             auto_suggest=AutoSuggestFromHistory(),
@@ -326,26 +401,35 @@ class MCPChatbot:
 
     @staticmethod
     def load_config(
-        config_path: str = "ez-config.json",
+        config_path: Union[str, Dict[str, Any]] = "ez-config.json",
     ) -> tuple[List, str, Dict[str, Any]]:
-        """Load configuration from JSON file."""
-        if os.path.exists(config_path):
-            with open(config_path, "r") as f:
-                config = json.load(f)
+        """Load configuration from JSON file or use provided dictionary."""
+        if isinstance(config_path, dict):
+            # Use dictionary directly
+            config = config_path
+        elif isinstance(config_path, str):
+            # Load from file (existing behavior)
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+            else:
+                # Use default configuration when no config file exists
+                config = {
+                    "model": "openai/gpt-4o-mini",
+                    "model_parameters": {"temperature": 0.2},
+                    "mcp_servers": [
+                        {
+                            "name": "ez-mcp-server",
+                            "description": "Ez MCP server with default tools",
+                            "command": "ez-mcp-server",
+                            "args": [],
+                        }
+                    ],
+                }
         else:
-            # Use default configuration when no config file exists
-            config = {
-                "model": "openai/gpt-4o-mini",
-                "model_parameters": {"temperature": 0.2},
-                "mcp_servers": [
-                    {
-                        "name": "ez-mcp-server",
-                        "description": "Ez MCP server with default tools",
-                        "command": "ez-mcp-server",
-                        "args": [],
-                    }
-                ],
-            }
+            raise TypeError(
+                f"config_path must be str or dict, got {type(config_path).__name__}"
+            )
 
         # Extract model configuration (support both model_parameters and model_kwargs for backwards compatibility)
         model = config.get("model", "openai/gpt-4o-mini")
@@ -390,9 +474,40 @@ class MCPChatbot:
             )
             await self.mcp_manager.connect_all_servers(servers)
         else:
-            servers = self.mcp_manager.load_mcp_config(self.config_path)
+            # Pass the config source (dict or path) to load_mcp_config
+            servers = self.mcp_manager.load_mcp_config(self._config_source)
             if servers:
                 await self.mcp_manager.connect_all_servers(servers)
+
+    def initialize(self) -> "MCPChatbot":
+        """Initialize and connect to all MCP servers synchronously.
+
+        This is a synchronous wrapper around connect_all_servers() that can be
+        called from Jupyter Notebooks or other synchronous contexts.
+
+        Returns:
+            self for method chaining
+        """
+        from .utils import run_async_in_sync_context
+
+        self.console.print(
+            f"Found [bold]{len(self.servers)}[/bold] server(s) to connect to:"
+        )
+        for server in self.servers:
+            self.console.print(
+                f"  - [cyan]{server['name']}[/cyan]: {server['description']}"
+            )
+
+        run_async_in_sync_context(self.connect_all_servers)
+
+        if not self.mcp_manager.sessions:
+            self.console.print("[red]No servers connected successfully.[/red]")
+        else:
+            self.console.print(
+                f"\n[green]Connected to {len(self.mcp_manager.sessions)} server(s). Ready for chat![/green]"
+            )
+
+        return self
 
     def _execute_python_code(self, code: str) -> str:
         """Execute Python code with persistent environment."""
@@ -1068,6 +1183,32 @@ class MCPChatbot:
             prompt_id=self.prompt_id,
         )
 
+    def chat_sync(self, user_text: str) -> str:
+        """Synchronous wrapper for chat() method.
+
+        This allows calling chat() from synchronous contexts like Jupyter Notebooks.
+
+        Args:
+            user_text: The user's message text
+
+        Returns:
+            The assistant's response as a string
+        """
+        from .utils import run_async_in_sync_context
+
+        return run_async_in_sync_context(self.chat, user_text)
+
+    def start(self) -> "MCPChatbot":
+        """Initialize and connect to servers, then return self for chaining.
+
+        Convenience method that calls initialize() and returns self, allowing
+        one-line setup: chatbot = MCPChatbot(config).start()
+
+        Returns:
+            self for method chaining
+        """
+        return self.initialize()
+
     def clear_messages(self) -> None:
         """Clear the message history, keeping only the system prompt."""
         self.messages = [
@@ -1085,10 +1226,294 @@ class MCPChatbot:
         """Get the number of messages in the history (excluding system prompt)."""
         return len(self.messages) - 1  # Subtract 1 for system prompt
 
-    async def run(self) -> None:
-        """Run the complete chat session with server connections and chat loop."""
+    def _is_jupyter(self) -> bool:
+        """Check if running in Jupyter/IPython environment.
+
+        Uses the same detection method as Opik's interactive_helpers.
+        """
         try:
-            self.console.print("[bold blue]Loaded configuration[/bold blue]")
+            import IPython
+        except Exception:
+            return False
+
+        ipy = IPython.get_ipython()
+        if ipy is None or not hasattr(ipy, "kernel"):
+            return False
+        else:
+            return True
+
+    def _run_jupyter_widgets(self) -> None:
+        """Run interactive chat loop using IPython widgets for Jupyter Notebooks."""
+        try:
+            import ipywidgets as widgets
+            from IPython.display import display, clear_output, Markdown, HTML
+        except ImportError:
+            raise ImportError(
+                "ipywidgets is required for Jupyter Notebook support. "
+                "Install with: pip install ipywidgets"
+            )
+        from .utils import run_async_in_sync_context
+
+        # Initialize servers first
+        self.initialize()
+
+        if not self.mcp_manager.sessions:
+            self.console.print(
+                "[red]No servers connected successfully. Cannot start chat.[/red]"
+            )
+            return
+
+        # Create widgets
+        # Output widget that grows dynamically (no fixed height)
+        output_widget = widgets.Output(
+            layout=widgets.Layout(
+                # No fixed height - let it grow naturally
+                min_height="100px",  # Start small
+                max_height="none",  # No max height limit
+                overflow="visible",  # Let content flow naturally
+                margin="0px",
+                padding="5px",
+                border="1px solid lightgray",
+            )
+        )
+        input_widget = widgets.Text(
+            placeholder="Type your message here...",
+            layout=widgets.Layout(width="100%", margin="0px"),
+        )
+        submit_button = widgets.Button(
+            description="Send",
+            button_style="primary",
+            layout=widgets.Layout(width="100px", margin="0px 5px 0px 0px"),
+        )
+        clear_button = widgets.Button(
+            description="Clear",
+            button_style="",
+            layout=widgets.Layout(width="100px", margin="0px 5px 0px 0px"),
+        )
+        help_button = widgets.Button(
+            description="Help",
+            button_style="",
+            layout=widgets.Layout(width="100px", margin="0px"),
+        )
+
+        # Create layout with minimal spacing
+        button_box = widgets.HBox(
+            [submit_button, clear_button, help_button],
+            layout=widgets.Layout(margin="0px", padding="0px"),
+        )
+        input_box = widgets.HBox(
+            [input_widget, button_box],
+            layout=widgets.Layout(margin="0px", padding="5px 0px 0px 0px"),
+        )
+        main_box = widgets.VBox(
+            [output_widget, input_box],
+            layout=widgets.Layout(margin="0px", padding="0px"),
+        )
+
+        # Display the interface
+        display(main_box)
+
+        # Helper function to append to output as Markdown
+        def append_output(text: str, style: str = "") -> None:
+            with output_widget:
+                # Display as Markdown for better formatting
+                display(Markdown(text))
+
+        # Spinner state - track if spinner is showing
+        _spinner_showing = False
+
+        def show_spinner() -> None:
+            """Show the thinking spinner in the output."""
+            nonlocal _spinner_showing
+            if not _spinner_showing:
+                with output_widget:
+                    display(
+                        HTML(
+                            '<div style="color: #666; font-style: italic; margin: 5px 0;">⏳ Thinking...</div>'
+                        )
+                    )
+                _spinner_showing = True
+
+        def hide_spinner() -> None:
+            """Hide the thinking spinner (it will be replaced by the response)."""
+            nonlocal _spinner_showing
+            _spinner_showing = False
+
+        # Helper function to process commands
+        def process_command(q: str) -> bool:
+            """Process a command. Returns True if should continue, False if should quit."""
+            q = q.strip()
+            if q == "":
+                return True
+            elif q.lower() in {"quit", "exit"}:
+                append_output("\nShutting down ez-mcp-chatbot...")
+                run_async_in_sync_context(self.close)
+                return False
+            elif q.lower() == "/help":
+                debug_status = "enabled" if self.debug else "disabled"
+                append_output(f"Debug mode: {debug_status}")
+                append_output("Type '/clear' to clear conversation history.")
+                append_output(
+                    "Type '/debug on' or '/debug off' to toggle debug output."
+                )
+                append_output("Type '/show tools' to list all available tools.")
+                append_output(
+                    "Type '/show tools SERVER' to list tools for a specific server."
+                )
+                append_output(
+                    "Type '/run SERVER.TOOL {'key': 'value'}' to execute a tool with JSON/dict arguments."
+                )
+                append_output(
+                    "Type '!python_code' to execute Python code (e.g., '!print(2+2)')."
+                )
+                return True
+            elif q.lower() == "/clear":
+                self.clear_messages()
+                append_output("Conversation history cleared.")
+                return True
+            elif q.lower() == "/debug on":
+                self.debug = True
+                append_output("Debug mode enabled.")
+                return True
+            elif q.lower() == "/debug off":
+                self.debug = False
+                append_output("Debug mode disabled.")
+                return True
+            elif q.startswith("/show tools"):
+                parts = q.split()
+                server_name = parts[2] if len(parts) > 2 else None
+                run_async_in_sync_context(self._handle_show_tools, server_name)
+                return True
+            elif q.startswith("/run "):
+                tool_command = q[5:].strip()
+                if tool_command:
+                    run_async_in_sync_context(self._handle_run_tool, tool_command)
+                else:
+                    append_output("Usage: /run SERVER.TOOL {'key': 'value'}")
+                return True
+            elif q.startswith("!"):
+                python_code = q[1:].strip()
+                if python_code:
+                    result = self._execute_python_code(python_code)
+                    append_output("\nPython:")
+                    append_output(result)
+                else:
+                    append_output("No Python code provided after !")
+                return True
+            else:
+                # Regular chat message
+                append_output(f"**You:** {q}")
+                try:
+                    # Show spinner while thinking
+                    show_spinner()
+                    response = self.chat_sync(q)
+                    hide_spinner()
+
+                    if response:
+                        append_output(f"**Assistant:**\n\n{response}")
+                    else:
+                        append_output("**Assistant:** (no reply)")
+                except Exception as e:
+                    hide_spinner()
+                    append_output(f"**Error:** {e}")
+                return True
+
+        # Event handlers
+        def on_submit(button: Any) -> None:
+            if input_widget.value:
+                q = input_widget.value
+                input_widget.value = ""
+                if not process_command(q):
+                    # Quit was called
+                    submit_button.disabled = True
+                    clear_button.disabled = True
+                    help_button.disabled = True
+                    input_widget.disabled = True
+
+        def on_clear(button: Any) -> None:
+            with output_widget:
+                clear_output()
+            append_output("Connected. Ready for chat!")
+            append_output("Type 'quit' or 'exit' to stop, /help for commands")
+
+        def on_help(button: Any) -> None:
+            """Show help information."""
+            debug_status = "enabled" if self.debug else "disabled"
+            append_output(f"**Debug mode:** {debug_status}")
+            append_output("**Commands:**")
+            append_output("- `/clear` - Clear conversation history")
+            append_output("- `/debug on` or `/debug off` - Toggle debug output")
+            append_output("- `/show tools` - List all available tools")
+            append_output("- `/show tools SERVER` - List tools for a specific server")
+            append_output("- `/run SERVER.TOOL {'key': 'value'}` - Execute a tool")
+            append_output(
+                "- `!python_code` - Execute Python code (e.g., `!print(2+2)`)"
+            )
+            append_output("- Type `quit` or `exit` to stop")
+
+        def on_enter_key(text_widget: Any) -> None:
+            on_submit(None)
+
+        # Attach event handlers
+        submit_button.on_click(on_submit)
+        clear_button.on_click(on_clear)
+        help_button.on_click(on_help)
+        input_widget.on_submit(on_enter_key)
+
+        # Initial message (no extra spacing)
+        with output_widget:
+            print(
+                f"Connected to {len(self.mcp_manager.sessions)} server(s). Ready for chat!",
+                flush=True,
+            )
+            print("Type 'quit' or 'exit' to stop, /help for commands", flush=True)
+
+    def run(self) -> None:
+        """Run the complete chat session with server connections and chat loop.
+
+        If running in Jupyter Notebook, uses IPython widgets for interactive interface.
+        Otherwise, uses prompt_toolkit for command-line interface (async).
+
+        This method is synchronous when in Jupyter, and async when not in Jupyter.
+        For non-Jupyter async usage, use: await chatbot.run_async()
+        """
+        # Check if we're in Jupyter or a non-terminal environment
+        import sys
+
+        is_jupyter = self._is_jupyter()
+        is_non_terminal = not sys.stdin.isatty()
+
+        # If we're in Jupyter or a non-terminal environment, try widgets
+        if is_jupyter or (is_non_terminal and hasattr(sys, "ps1") is False):
+            try:
+                return self._run_jupyter_widgets()
+            except ImportError:
+                # Fall back to regular run if ipywidgets not available
+                if is_jupyter:
+                    self.console.print(
+                        "[yellow]IPython widgets not available. Install with: pip install ipywidgets[/yellow]"
+                    )
+                # Fall through to async run, but we need to handle it
+                from .utils import run_async_in_sync_context
+
+                return run_async_in_sync_context(self.run_async)
+
+        # For non-Jupyter terminal, we need to run async version
+        # But since this is a sync method, we'll use run_async_in_sync_context
+        from .utils import run_async_in_sync_context
+
+        return run_async_in_sync_context(self.run_async)
+
+    async def run_async(self) -> None:
+        """Async version of run() for non-Jupyter environments.
+
+        This is the original async implementation using prompt_toolkit.
+        """
+        # Ensure prompt_toolkit is set up for non-Jupyter use
+        if self.prompt_session is None:
+            self._setup_prompt_toolkit()
+
+        try:
             self.console.print(
                 f"Found [bold]{len(self.servers)}[/bold] server(s) to connect to:"
             )
@@ -1108,30 +1533,13 @@ class MCPChatbot:
             self.console.print(
                 f"\n[green]Connected to {len(self.mcp_manager.sessions)} server(s). Ready for chat![/green]"
             )
-            debug_status = "enabled" if self.debug else "disabled"
-            self.console.print(f"[dim]Debug mode: {debug_status}[/dim]")
-            self.console.print("[dim]Type 'quit' or 'exit' to stop.[/dim]")
             self.console.print(
-                "[dim]Type '/clear' to clear conversation history.[/dim]"
+                "[dim]Type 'quit' or 'exit' to stop, /help for commands[/dim]"
             )
-            self.console.print(
-                "[dim]Type '/debug on' or '/debug off' to toggle debug output.[/dim]"
-            )
-            self.console.print(
-                "[dim]Type '/show tools' to list all available tools.[/dim]"
-            )
-            self.console.print(
-                "[dim]Type '/show tools SERVER' to list tools for a specific server.[/dim]"
-            )
-            self.console.print(
-                "[dim]Type '/run SERVER.TOOL {'key': 'value'}' to execute a tool with JSON/dict arguments.[/dim]"
-            )
-            self.console.print(
-                "[dim]Type '!python_code' to execute Python code (e.g., '!print(2+2)').[/dim]\n"
-            )
-
             while True:
                 try:
+                    if self.prompt_session is None:
+                        raise RuntimeError("prompt_session not initialized")
                     q = self.prompt_session.prompt(">>> ")
                 except (EOFError, KeyboardInterrupt):
                     break
@@ -1141,6 +1549,28 @@ class MCPChatbot:
                     continue
                 elif q.lower() in {"quit", "exit"}:
                     break
+                elif q.lower() == "/help":
+                    debug_status = "enabled" if self.debug else "disabled"
+                    self.console.print(f"[dim]Debug mode: {debug_status}[/dim]")
+                    self.console.print(
+                        "[dim]Type '/clear' to clear conversation history.[/dim]"
+                    )
+                    self.console.print(
+                        "[dim]Type '/debug on' or '/debug off' to toggle debug output.[/dim]"
+                    )
+                    self.console.print(
+                        "[dim]Type '/show tools' to list all available tools.[/dim]"
+                    )
+                    self.console.print(
+                        "[dim]Type '/show tools SERVER' to list tools for a specific server.[/dim]"
+                    )
+                    self.console.print(
+                        "[dim]Type '/run SERVER.TOOL {'key': 'value'}' to execute a tool with JSON/dict arguments.[/dim]"
+                    )
+                    self.console.print(
+                        "[dim]Type '!python_code' to execute Python code (e.g., '!print(2+2)').[/dim]\n"
+                    )
+                    continue
                 elif q.lower() == "/clear":
                     self.clear_messages()
                     self.console.print("[yellow]Conversation history cleared.[/yellow]")
@@ -1734,7 +2164,8 @@ with any of the available tools.
         tools_file=args.tools_file,
         prompt_id=prompt_id,
     )
-    await bot.run()
+    # For command-line, use async version
+    await bot.run_async()
 
 
 def main_sync() -> None:

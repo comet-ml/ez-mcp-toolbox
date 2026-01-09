@@ -10,7 +10,7 @@ import subprocess
 import uuid
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -152,14 +152,36 @@ class MCPManager:
         self._server_configs: Dict[str, ServerConfig] = {}
 
     def load_mcp_config(
-        self, config_path: str = "ez-config.json"
+        self, config_path: Union[str, Dict[str, Any], None] = "ez-config.json"
     ) -> List[ServerConfig]:
-        """Load MCP server configuration from JSON file."""
-        if os.path.exists(config_path):
-            with open(config_path, "r") as f:
-                config = json.load(f)
-        else:
-            # Use default configuration when no config file exists
+        """Load MCP server configuration from JSON file or dictionary.
+
+        Args:
+            config_path: Either a file path (str) or a configuration dictionary.
+                        If None, uses default configuration.
+        """
+        if isinstance(config_path, dict):
+            # Use dictionary directly
+            config = config_path
+        elif isinstance(config_path, str):
+            # Load from file
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+            else:
+                # Use default configuration when no config file exists
+                config = {
+                    "mcp_servers": [
+                        {
+                            "name": "ez-mcp-server",
+                            "description": "Ez MCP server with default tools",
+                            "command": "ez-mcp-server",
+                            "args": [],
+                        }
+                    ],
+                }
+        elif config_path is None:
+            # Use default configuration
             config = {
                 "mcp_servers": [
                     {
@@ -170,6 +192,10 @@ class MCPManager:
                     }
                 ],
             }
+        else:
+            raise TypeError(
+                f"config_path must be str, dict, or None, got {type(config_path).__name__}"
+            )
 
         servers = []
         for server_data in config.get("mcp_servers", []):
