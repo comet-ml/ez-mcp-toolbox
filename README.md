@@ -2,6 +2,8 @@
 
 *A Comet ML Open Source Project*
 
+[Opik](https://github.com/comet-ml/opik) is the open-source LLM observability and evaluation platform, built by [Comet](https://www.comet.com). This toolbox uses Opik for tracing, evaluating, and optimizing MCP tools and LLM applications.
+
 This Python toolbox contains four command-line easy to use utilities:
 
 1. `ez-mcp-server` - turns a file of Python functions into a MCP server
@@ -11,7 +13,7 @@ This Python toolbox contains four command-line easy to use utilities:
 
 ## Why?
 
-The `ez-mcp-server` allows a quick way to examine tools, signatures, descriptions, latency, and return values. Combined with the chatbot, you can create a fast workflow to interate on your MCP tools.
+The `ez-mcp-server` allows a quick way to examine tools, signatures, descriptions, latency, and return values. Combined with the chatbot, you can create a fast workflow to iterate on your MCP tools.
 
 The `ez-mcp-chatbot` allows a quick method to examine and debug LLM and MCP tool interactions, with observability available through [Opik](https://github.com/comet-ml/opik). Although the [Opik Playground](https://www.comet.com/docs/opik/opik-university/prompt-engineering/prompt-playground) gives you the ability to test your prompts on datasets, do A/B testing, and more, this chatbot gives you a command-line interaction, debugging tools, combined with Opik observability.
 
